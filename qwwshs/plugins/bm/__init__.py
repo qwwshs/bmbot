@@ -46,7 +46,7 @@ from .charter import (
 )
 from .constants import DATA_DIR, ConstantsError, get_song_constants
 from .decrypt import DecryptError, parse_account_data
-from .rating import compute_rating, normalize_n10_name, parse_scores
+from .rating import ALL_DIFFS, compute_rating, normalize_n10_name, parse_scores
 from .render import render_card
 from .song import (
     add_alias,
@@ -881,40 +881,65 @@ async def handle_name_list(event: MessageEvent) -> None:
 # ================================================================
 
 
-def _charter_entries(charter_name: str) -> list[tuple[str, str]]:
-    """按谱师名义收集其（含关联名义组）制作的 (曲名, 难度) 列表。"""
+def _charter_entries(charter_name: str) -> list[tuple[str, list[str]]]:
+    """按谱师名义收集其（含关联名义组）制作的谱面，按曲目聚合难度。
+
+    返回 ``[(曲名, [难度...])]``，难度按 RL/IL/TT/RU/DM/FL 顺序。
+    """
     group_norms = {normalize_n10_name(name) for name in group_of(charter_name)}
-    charts: list[tuple[str, str]] = []
+    by_song: dict[str, list[str]] = {}
     for song, entry in SONG_CONSTANTS.items():
         for diff, charter in (entry.get("charter") or {}).items():
             if charter and normalize_n10_name(charter) in group_norms:
-                charts.append((song, diff))
-    charts.sort(key=lambda item: (normalize_n10_name(item[0]), item[0], item[1]))
+                by_song.setdefault(song, []).append(diff)
+    diff_order = {diff: index for index, diff in enumerate(ALL_DIFFS)}
+    charts = sorted(
+        by_song.items(), key=lambda item: (normalize_n10_name(item[0]), item[0])
+    )
+    for _song, diffs in charts:
+        diffs.sort(key=lambda diff: diff_order.get(diff, 99))
     return charts
 
 
-async def _show_charter_charts(matcher: Matcher, qq: str, charter_name: str) -> None:
-    """输出谱师谱面列表（<序号> <歌曲> <难度>），供序号选择。"""
-    charts = _charter_entries(charter_name)
-    if not charts:
-        await matcher.finish(f"❌ 谱师「{charter_name}」暂无谱面记录")
+async def _send_charter_page(matcher: Matcher, state: dict) -> None:
+    """渲染并发送谱面列表当前页（全局连续序号；多页时提示翻页）。"""
+    charter_name = state["charter_name"]
+    charts: list[tuple[str, list[str]]] = state["charts"]
+    page = state["page"]
+    total = len(charts)
+    pages = max(1, (total + _CHARTER_LIST_LIMIT - 1) // _CHARTER_LIST_LIMIT)
+    start = page * _CHARTER_LIST_LIMIT
+    shown = charts[start : start + _CHARTER_LIST_LIMIT]
     lines = [f"🎵 谱师：{charter_name}"]
     group = group_of(charter_name)
     if len(group) > 1:
         others = "、".join(sorted(name for name in group if name != charter_name))
         lines.append(f"（含关联名义：{others}）")
-    shown = charts[:_CHARTER_LIST_LIMIT]
     lines.extend(
-        f"{i + 1}. {_display_name(song)} {diff}" for i, (song, diff) in enumerate(shown)
+        f"{start + i + 1}. {_display_name(song)} {'/'.join(diffs)}"
+        for i, (song, diffs) in enumerate(shown)
     )
-    if len(charts) > _CHARTER_LIST_LIMIT:
-        lines.append(f"… 共 {len(charts)} 首，仅显示前 {_CHARTER_LIST_LIMIT} 首")
+    if pages > 1:
+        lines.append(
+            f"—— 第 {page + 1}/{pages} 页（共 {total} 首）· "
+            "发送「下一页/上一页」翻页 · 回复序号查看歌曲 ——"
+        )
+    await matcher.finish("\n".join(lines))
+
+
+async def _show_charter_charts(matcher: Matcher, qq: str, charter_name: str) -> None:
+    """输出谱师谱面列表（分页显示），供序号选择与翻页。"""
+    charts = _charter_entries(charter_name)
+    if not charts:
+        await matcher.finish(f"❌ 谱师「{charter_name}」暂无谱面记录")
     _charter_pending[qq] = {
         "action": "chart_pick",
-        "charts": shown,
+        "charter_name": charter_name,
+        "charts": charts,
+        "page": 0,
         "expire": time.monotonic() + _SONG_PICK_TTL,
     }
-    await matcher.finish("\n".join(lines))
+    await _send_charter_page(matcher, _charter_pending[qq])
 
 
 @bm_charter.handle()
@@ -1129,6 +1154,18 @@ async def _handle_charter_name_input(qq: str, state: dict, text: str) -> None:
     await bm_charter_pick.send("\n".join(lines))
 
 
+async def _handle_charter_page_flip(qq: str, state: dict, nav: str) -> None:
+    """谱面列表翻页：更新页码并重新渲染。"""
+    total = len(state["charts"])
+    pages = max(1, (total + _CHARTER_LIST_LIMIT - 1) // _CHARTER_LIST_LIMIT)
+    if nav in ("下一页", "n"):
+        state["page"] = min(pages - 1, state["page"] + 1)
+    else:
+        state["page"] = max(0, state["page"] - 1)
+    _charter_pending[qq] = state
+    await _send_charter_page(bm_charter_pick, state)
+
+
 async def _handle_charter_number_pick(qq: str, state: dict, index: int) -> None:
     """序号选择阶段：按动作分发到对应流程。"""
     action = state["action"]
@@ -1138,7 +1175,7 @@ async def _handle_charter_number_pick(qq: str, state: dict, index: int) -> None:
             await bm_charter_pick.send(f"❌ 序号无效（1-{len(charts)}）")
             return
         _charter_pending.pop(qq, None)
-        song, _diff = charts[index - 1]
+        song, _diffs = charts[index - 1]
         await _send_song_detail(bm_charter_pick, qq, song)
         return
     names = state.get("names") or []
@@ -1174,10 +1211,15 @@ async def handle_charter_pick(event: MessageEvent) -> None:
         _charter_pending.pop(qq, None)
         return
     text = event.get_plaintext().strip()
+    action = state["action"]
     # 等待输入「谱师名义」的阶段：收到的是名字而非序号
-    if state["action"] in ("related_name", "remove_name"):
+    if action in ("related_name", "remove_name"):
         if text:
             await _handle_charter_name_input(qq, state, text)
+        return
+    # 谱面列表翻页
+    if action == "chart_pick" and text in ("下一页", "上一页", "n", "p"):
+        await _handle_charter_page_flip(qq, state, text)
         return
     if text.isdigit():
         await _handle_charter_number_pick(qq, state, int(text))
