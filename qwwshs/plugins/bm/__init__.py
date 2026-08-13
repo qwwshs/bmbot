@@ -100,7 +100,7 @@ _ALIAS_MAX_LEN = 30
 _CHARTER_LIST_LIMIT = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.2.1"
+BM_VERSION = "0.2.2"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}

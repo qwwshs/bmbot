@@ -150,7 +150,7 @@ def get_song_scores(data: dict, song_name: str) -> list[tuple[str, int, str]]:
 def format_song_detail(
     name: str, entry: dict, scores: list[tuple[str, int, str]]
 ) -> str:
-    """构建单曲详情文本（标题为原曲名<名称>）。"""
+    """构建单曲详情文本（标题为原曲名<名称>，列出各难度与谱师）。"""
     original = str(entry.get("originalName") or "").strip()
     title = f"{original}<{name}>" if original and original != name else name
     lines = [f"🎵 {title}"]
@@ -158,14 +158,27 @@ def format_song_detail(
     if artist:
         lines.append(f"曲师：{artist}")
     lines.append("")
-    if scores:
-        lines.append("📊 成绩")
-        for diff, score, grade in scores:
-            constant = entry.get(diff)
-            const_text = f"({constant:.1f})" if constant else ""
-            lines.append(f"{diff}{const_text}  {score}  {grade}")
+    charters = entry.get("charter") or {}
+    score_map = {diff: (score, grade) for diff, score, grade in scores}
+    rows: list[str] = []
+    for diff in ALL_DIFFS:
+        constant = entry.get(diff)
+        if constant is None or float(constant) <= 0:
+            continue
+        const_text = f"({constant:.1f})"
+        charter = charters.get(diff, "")
+        score, grade = score_map.get(diff, (None, None))
+        if score is not None:
+            rows.append(
+                f"{diff}{const_text}  {score}  {grade}  谱师：{charter or '未知'}"
+            )
+        else:
+            rows.append(f"{diff}{const_text}  未游玩  谱师：{charter or '未知'}")
+    if rows:
+        lines.append("📊 谱面与谱师")
+        lines.extend(rows)
     else:
-        lines.append("暂无已录入成绩")
+        lines.append("暂无谱面数据")
     return "\n".join(lines)
 
 
