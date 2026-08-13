@@ -19,6 +19,7 @@
 | `/bmremovefromwhitelist <QQ>` | 移除白名单成员（仅超管） |
 | `/bmcharter <谱师>` | 按谱师查询谱面（模糊搜索，多结果回复序号；自动扩展关联名义组） |
 | `/bmsetuptheprimitivecharter <谱师>` | 设置基元谱师名义（本名，须能在定数表中查到）（白名单） |
+| `/bmremovetheprimitivecharter <谱师>` | 移除基元谱师名义（连同其关联名义）（白名单） |
 | `/bmrelatedcharter <基元谱师>` | 添加基元谱师名义的马甲/合作名义（须能在定数表中查到）（白名单） |
 | `/bmremoverelatedcharter <基元谱师>` | 解除基元谱师名义与另一名义的关联（白名单） |
 | `/bmrelatedcharterlist` | 列出所有基元谱师与其关联名义（白名单） |

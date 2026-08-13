@@ -40,6 +40,7 @@ from .charter import (
     group_of,
     is_primitive,
     load_charters,
+    remove_primitive,
     remove_related,
     save_charters,
     search_charters,
@@ -99,7 +100,7 @@ _ALIAS_MAX_LEN = 30
 _CHARTER_LIST_LIMIT = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.2.0"
+BM_VERSION = "0.2.1"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -407,6 +408,7 @@ bm_charter_setup = on_command("bmsetuptheprimitivecharter", priority=5, block=Tr
 bm_charter_related = on_command("bmrelatedcharter", priority=5, block=True)
 bm_charter_remove = on_command("bmremoverelatedcharter", priority=5, block=True)
 bm_charter_list = on_command("bmrelatedcharterlist", priority=5, block=True)
+bm_charter_unset = on_command("bmremovetheprimitivecharter", priority=5, block=True)
 bm_file_watch = on_message(priority=10, block=False)
 bm_song_pick = on_message(priority=10, block=False)
 bm_addname_pick = on_message(priority=10, block=False)
@@ -438,6 +440,7 @@ async def handle_help() -> None:
         "/bmsetuptheprimitivecharter <谱师> — 设置基元谱师名义（白名单）\n"
         "/bmrelatedcharter <基元谱师> — 添加关联谱师名义（白名单）\n"
         "/bmremoverelatedcharter <基元谱师> — 解除关联谱师名义（白名单）\n"
+        "/bmremovetheprimitivecharter <谱师> — 移除基元谱师名义（白名单）\n"
         "/bmrelatedcharterlist — 查看全部谱师关联（白名单）\n"
         "/bmbotversion — 查看 bot 版本\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -1093,6 +1096,48 @@ async def handle_charter_remove(
     await _ask_remove_name(bm_charter_remove, qq, names[0])
 
 
+async def _remove_primitive_and_reply(matcher: Matcher, name: str) -> None:
+    """移除基元谱师名义（连同其关联名义）并回复结果。"""
+    if not is_primitive(name):
+        await matcher.finish(f"❌ 「{name}」还不是基元谱师名义")
+    related = get_related(name)
+    remove_primitive(name)
+    save_charters(_CHARTERS_PATH)
+    message = f"✅ 已移除基元谱师名义「{name}」"
+    if related:
+        message += f"（同时解除 {len(related)} 个关联名义：{'、'.join(related)}）"
+    await matcher.finish(message)
+
+
+@bm_charter_unset.handle()
+async def handle_charter_unset(
+    event: MessageEvent, arg: Message = CommandArg()
+) -> None:
+    """移除基元谱师名义（本名），连同其关联名义一并解除。"""
+    qq = str(event.user_id)
+    if not _can_manage_alias(event.user_id):
+        await bm_charter_unset.finish("❌ 你没有权限使用此命令")
+    query = arg.extract_plain_text().strip()
+    if not query:
+        await bm_charter_unset.finish("用法：/bmremovetheprimitivecharter <谱师名义>")
+    if not SONG_CONSTANTS:
+        await bm_charter_unset.finish("❌ 定数表未加载")
+    names = search_charters(SONG_CONSTANTS, query)
+    if not names:
+        await bm_charter_unset.finish(f"❌ 未在定数表中找到谱师「{query}」")
+    if len(names) == 1:
+        await _remove_primitive_and_reply(bm_charter_unset, names[0])
+        return
+    _charter_pending[qq] = {
+        "action": "remove_primitive_pick",
+        "names": names,
+        "expire": time.monotonic() + _SONG_PICK_TTL,
+    }
+    lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择："]
+    lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
+    await bm_charter_unset.finish("\n".join(lines))
+
+
 @bm_charter_list.handle()
 async def handle_charter_list(event: MessageEvent) -> None:
     """列出所有基元谱师与其关联名义。"""
@@ -1184,6 +1229,12 @@ async def _handle_charter_number_pick(qq: str, state: dict, index: int) -> None:
         return
     picked = names[index - 1]
     _charter_pending.pop(qq, None)
+    await _apply_charter_pick_action(qq, state, picked)
+
+
+async def _apply_charter_pick_action(qq: str, state: dict, picked: str) -> None:
+    """执行选中的谱师流程动作。"""
+    action = state["action"]
     if action == "charter_pick":
         await _show_charter_charts(bm_charter_pick, qq, picked)
     elif action == "setup_pick":
@@ -1198,6 +1249,8 @@ async def _handle_charter_number_pick(qq: str, state: dict, index: int) -> None:
         await _apply_related_change(state["primitive"], picked, "related")
     elif action == "remove_pick":
         await _apply_related_change(state["primitive"], picked, "remove")
+    elif action == "remove_primitive_pick":
+        await _remove_primitive_and_reply(bm_charter_pick, picked)
 
 
 @bm_charter_pick.handle()

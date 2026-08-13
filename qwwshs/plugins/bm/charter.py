@@ -60,6 +60,16 @@ def add_primitive(name: str) -> None:
     _PRIMITIVES.setdefault(name.strip(), [])
 
 
+def remove_primitive(name: str) -> bool:
+    """移除基元谱师名义（连同其关联名义），成功返回 True。"""
+    norm = normalize_n10_name(name)
+    for primitive in list(_PRIMITIVES):
+        if normalize_n10_name(primitive) == norm:
+            del _PRIMITIVES[primitive]
+            return True
+    return False
+
+
 def add_related(primitive: str, related: str) -> bool:
     """给基元谱师添加关联名义（马甲/合作名义），已存在返回 False。"""
     primitive = primitive.strip()
