@@ -32,9 +32,21 @@ from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from pydantic import BaseModel
 
+from .charter import (
+    add_primitive,
+    add_related,
+    all_primitives,
+    get_related,
+    group_of,
+    is_primitive,
+    load_charters,
+    remove_related,
+    save_charters,
+    search_charters,
+)
 from .constants import DATA_DIR, ConstantsError, get_song_constants
 from .decrypt import DecryptError, parse_account_data
-from .rating import compute_rating, parse_scores
+from .rating import compute_rating, normalize_n10_name, parse_scores
 from .render import render_card
 from .song import (
     add_alias,
@@ -77,14 +89,17 @@ _BINDINGS_PATH = _DATA_DIR / "bindings.json"
 _BINDINGS_BAK = _DATA_DIR / "bindings.json.bak"
 _ALIASES_PATH = _DATA_DIR / "aliases.json"
 _WHITELIST_PATH = _DATA_DIR / "whitelist.json"
+_CHARTERS_PATH = _DATA_DIR / "charters.json"
 # 旧位置（插件包内 data/），用于自动迁移
 _OLD_BINDINGS_PATH = Path(__file__).resolve().parent / "data" / "bindings.json"
 _FILE_WAIT_TTL = 300.0
 _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
+# 谱师谱面列表单次最多显示的条目数
+_CHARTER_LIST_LIMIT = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.1.0"
+BM_VERSION = "0.2.0"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -96,8 +111,11 @@ _song_pending: dict[str, dict] = {}
 _addname_pending: dict[str, dict] = {}
 # QQ 号 -> {alias: 别名, names: 搜索结果, expire: 过期时间}（bmremovename 流程）
 _remove_pending: dict[str, dict] = {}
+# QQ 号 -> 谱师流程状态（bmcharter / 基元谱师管理，见 handle_charter_pick）
+_charter_pending: dict[str, dict] = {}
 
 load_aliases(_ALIASES_PATH)
+load_charters(_CHARTERS_PATH)
 
 
 def _load_whitelist() -> set[int]:
@@ -214,7 +232,16 @@ def _store_binding(qq: str, data: dict) -> str:
 
 
 def _decode_text(raw: bytes) -> str:
-    """按 UTF-8 → GBK → 宽松替换的顺序解码文件内容。"""
+    """按 UTF-16(BOM) → UTF-8 → GBK → 宽松替换的顺序解码文件内容。
+
+    部分导出工具会把存档存成 UTF-16 编码（带 BOM）：这类字节流按 UTF-8
+    解码不会报错，但会产生大量 NUL 字符穿插在 <RSAKeyValue> 标签中间，
+    必须先按 BOM 检测 UTF-16，否则无法识别标签。
+    """
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig")
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -375,10 +402,16 @@ bm_remove_name = on_command("bmremovename", priority=5, block=True)
 bm_name_list = on_command("bmnamelist", priority=5, block=True)
 bm_whitelist_add = on_command("bmaddtowhitelist", priority=5, block=True)
 bm_whitelist_remove = on_command("bmremovefromwhitelist", priority=5, block=True)
+bm_charter = on_command("bmcharter", priority=5, block=True)
+bm_charter_setup = on_command("bmsetuptheprimitivecharter", priority=5, block=True)
+bm_charter_related = on_command("bmrelatedcharter", priority=5, block=True)
+bm_charter_remove = on_command("bmremoverelatedcharter", priority=5, block=True)
+bm_charter_list = on_command("bmrelatedcharterlist", priority=5, block=True)
 bm_file_watch = on_message(priority=10, block=False)
 bm_song_pick = on_message(priority=10, block=False)
 bm_addname_pick = on_message(priority=10, block=False)
 bm_remove_pick = on_message(priority=10, block=False)
+bm_charter_pick = on_message(priority=10, block=False)
 bm_group_upload = on_notice(priority=5, block=False)
 
 _load_bindings()
@@ -401,6 +434,11 @@ async def handle_help() -> None:
         "/bmnamelist — 查看全部别名对应关系（白名单）\n"
         "/bmaddtowhitelist <QQ> — 添加白名单（超管）\n"
         "/bmremovefromwhitelist <QQ> — 移除白名单（超管）\n"
+        "/bmcharter <谱师> — 按谱师查询谱面（回复序号查看歌曲详情）\n"
+        "/bmsetuptheprimitivecharter <谱师> — 设置基元谱师名义（白名单）\n"
+        "/bmrelatedcharter <基元谱师> — 添加关联谱师名义（白名单）\n"
+        "/bmremoverelatedcharter <基元谱师> — 解除关联谱师名义（白名单）\n"
+        "/bmrelatedcharterlist — 查看全部谱师关联（白名单）\n"
         "/bmbotversion — 查看 bot 版本\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "📱 存档位置：/Android/data/com.skywaystudio.BerryMelody/files/FormalSave.txt"
@@ -837,3 +875,309 @@ async def handle_name_list(event: MessageEvent) -> None:
         f"{alias} → {_display_name(name)}" for alias, name in sorted(aliases.items())
     )
     await bm_name_list.finish("\n".join(lines))
+
+
+# 谱师查询与管理（bmcharter / 基元谱师名义）
+# ================================================================
+
+
+def _charter_entries(charter_name: str) -> list[tuple[str, str]]:
+    """按谱师名义收集其（含关联名义组）制作的 (曲名, 难度) 列表。"""
+    group_norms = {normalize_n10_name(name) for name in group_of(charter_name)}
+    charts: list[tuple[str, str]] = []
+    for song, entry in SONG_CONSTANTS.items():
+        for diff, charter in (entry.get("charter") or {}).items():
+            if charter and normalize_n10_name(charter) in group_norms:
+                charts.append((song, diff))
+    charts.sort(key=lambda item: (normalize_n10_name(item[0]), item[0], item[1]))
+    return charts
+
+
+async def _show_charter_charts(matcher: Matcher, qq: str, charter_name: str) -> None:
+    """输出谱师谱面列表（<序号> <歌曲> <难度>），供序号选择。"""
+    charts = _charter_entries(charter_name)
+    if not charts:
+        await matcher.finish(f"❌ 谱师「{charter_name}」暂无谱面记录")
+    lines = [f"🎵 谱师：{charter_name}"]
+    group = group_of(charter_name)
+    if len(group) > 1:
+        others = "、".join(sorted(name for name in group if name != charter_name))
+        lines.append(f"（含关联名义：{others}）")
+    shown = charts[:_CHARTER_LIST_LIMIT]
+    lines.extend(
+        f"{i + 1}. {_display_name(song)} {diff}" for i, (song, diff) in enumerate(shown)
+    )
+    if len(charts) > _CHARTER_LIST_LIMIT:
+        lines.append(f"… 共 {len(charts)} 首，仅显示前 {_CHARTER_LIST_LIMIT} 首")
+    _charter_pending[qq] = {
+        "action": "chart_pick",
+        "charts": shown,
+        "expire": time.monotonic() + _SONG_PICK_TTL,
+    }
+    await matcher.finish("\n".join(lines))
+
+
+@bm_charter.handle()
+async def handle_charter(event: MessageEvent, arg: Message = CommandArg()) -> None:
+    """按谱师查询谱面，流程与 bmsong 相同（可回复序号选择）。"""
+    qq = str(event.user_id)
+    query = arg.extract_plain_text().strip()
+    if not query:
+        await bm_charter.finish("用法：/bmcharter <谱师>\n例如：/bmcharter qqxqqx")
+    if not SONG_CONSTANTS:
+        await bm_charter.finish("❌ 定数表未加载，无法查询")
+    names = search_charters(SONG_CONSTANTS, query)
+    if not names:
+        await bm_charter.finish(f"❌ 未找到与「{query}」相关的谱师")
+    if len(names) == 1:
+        await _show_charter_charts(bm_charter, qq, names[0])
+        return
+    _charter_pending[qq] = {
+        "action": "charter_pick",
+        "names": names,
+        "expire": time.monotonic() + _SONG_PICK_TTL,
+    }
+    lines = [f"🔍 找到 {len(names)} 位谱师，回复序号查看其谱面："]
+    lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
+    lines.append(f"（{_SONG_PICK_TTL:.0f} 秒内有效）")
+    await bm_charter.finish("\n".join(lines))
+
+
+@bm_charter_setup.handle()
+async def handle_charter_setup(
+    event: MessageEvent, arg: Message = CommandArg()
+) -> None:
+    """设置基元谱师名义（本名），谱师必须能在定数表中查到。"""
+    qq = str(event.user_id)
+    if not _can_manage_alias(event.user_id):
+        await bm_charter_setup.finish("❌ 你没有权限使用此命令")
+    query = arg.extract_plain_text().strip()
+    if not query:
+        await bm_charter_setup.finish("用法：/bmsetuptheprimitivecharter <谱师名义>")
+    if not SONG_CONSTANTS:
+        await bm_charter_setup.finish("❌ 定数表未加载")
+    names = search_charters(SONG_CONSTANTS, query)
+    if not names:
+        await bm_charter_setup.finish(f"❌ 未在定数表中找到谱师「{query}」")
+    if len(names) == 1:
+        add_primitive(names[0])
+        save_charters(_CHARTERS_PATH)
+        await bm_charter_setup.finish(f"✅ 已将「{names[0]}」设为基元谱师名义（本名）")
+    _charter_pending[qq] = {
+        "action": "setup_pick",
+        "names": names,
+        "expire": time.monotonic() + _SONG_PICK_TTL,
+    }
+    lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择："]
+    lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
+    await bm_charter_setup.finish("\n".join(lines))
+
+
+async def _ask_related_name(matcher: Matcher, qq: str, primitive: str) -> None:
+    """进入等待输入关联谱师名义的状态。"""
+    if not is_primitive(primitive):
+        await matcher.finish(
+            f"❌ 「{primitive}」还不是基元谱师名义\n"
+            "请先用 /bmsetuptheprimitivecharter 设置本名"
+        )
+    _charter_pending[qq] = {
+        "action": "related_name",
+        "primitive": primitive,
+        "names": [],
+        "expire": time.monotonic() + _SONG_PICK_TTL,
+    }
+    await matcher.finish(
+        f"📝 基元谱师名义「{primitive}」\n"
+        "请输入要关联的谱师名义（马甲/合作名义，需能在定数表中查到）："
+    )
+
+
+async def _ask_remove_name(matcher: Matcher, qq: str, primitive: str) -> None:
+    """进入等待输入解除关联谱师名义的状态。"""
+    if not is_primitive(primitive):
+        await matcher.finish(
+            f"❌ 「{primitive}」还不是基元谱师名义\n"
+            "请先用 /bmsetuptheprimitivecharter 设置本名"
+        )
+    _charter_pending[qq] = {
+        "action": "remove_name",
+        "primitive": primitive,
+        "names": [],
+        "expire": time.monotonic() + _SONG_PICK_TTL,
+    }
+    await matcher.finish(
+        f"📝 基元谱师名义「{primitive}」\n请输入要解除关联的谱师名义："
+    )
+
+
+@bm_charter_related.handle()
+async def handle_charter_related(
+    event: MessageEvent, arg: Message = CommandArg()
+) -> None:
+    """添加基元谱师名义的马甲/合作名义，流程与 bmaddname 相同。"""
+    qq = str(event.user_id)
+    if not _can_manage_alias(event.user_id):
+        await bm_charter_related.finish("❌ 你没有权限使用此命令")
+    query = arg.extract_plain_text().strip()
+    if not query:
+        await bm_charter_related.finish("用法：/bmrelatedcharter <基元谱师名义>")
+    if not SONG_CONSTANTS:
+        await bm_charter_related.finish("❌ 定数表未加载")
+    names = search_charters(SONG_CONSTANTS, query)
+    if not names:
+        await bm_charter_related.finish(f"❌ 未在定数表中找到谱师「{query}」")
+    if len(names) > 1:
+        _charter_pending[qq] = {
+            "action": "related_prim_pick",
+            "names": names,
+            "expire": time.monotonic() + _SONG_PICK_TTL,
+        }
+        lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择基元谱师名义："]
+        lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
+        await bm_charter_related.finish("\n".join(lines))
+        return
+    await _ask_related_name(bm_charter_related, qq, names[0])
+
+
+@bm_charter_remove.handle()
+async def handle_charter_remove(
+    event: MessageEvent, arg: Message = CommandArg()
+) -> None:
+    """解除基元谱师名义与另一谱师名义的关联，流程与 bmremovename 相同。"""
+    qq = str(event.user_id)
+    if not _can_manage_alias(event.user_id):
+        await bm_charter_remove.finish("❌ 你没有权限使用此命令")
+    query = arg.extract_plain_text().strip()
+    if not query:
+        await bm_charter_remove.finish("用法：/bmremoverelatedcharter <基元谱师名义>")
+    if not SONG_CONSTANTS:
+        await bm_charter_remove.finish("❌ 定数表未加载")
+    names = search_charters(SONG_CONSTANTS, query)
+    if not names:
+        await bm_charter_remove.finish(f"❌ 未在定数表中找到谱师「{query}」")
+    if len(names) > 1:
+        _charter_pending[qq] = {
+            "action": "remove_prim_pick",
+            "names": names,
+            "expire": time.monotonic() + _SONG_PICK_TTL,
+        }
+        lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择基元谱师名义："]
+        lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
+        await bm_charter_remove.finish("\n".join(lines))
+        return
+    await _ask_remove_name(bm_charter_remove, qq, names[0])
+
+
+@bm_charter_list.handle()
+async def handle_charter_list(event: MessageEvent) -> None:
+    """列出所有基元谱师与其关联名义。"""
+    if not _can_manage_alias(event.user_id):
+        await bm_charter_list.finish("❌ 你没有权限使用此命令")
+    primitives = all_primitives()
+    if not primitives:
+        await bm_charter_list.finish("📋 当前没有基元谱师")
+    lines = [f"📋 谱师关联列表（共 {len(primitives)} 位基元谱师）："]
+    for primitive in sorted(primitives):
+        related = get_related(primitive)
+        lines.append(f"{primitive}：{' / '.join(related) if related else '（无关联）'}")
+    await bm_charter_list.finish("\n".join(lines))
+
+
+async def _apply_related_change(primitive: str, related: str, op: str) -> None:
+    """执行关联/解除关联并持久化。"""
+    if op == "related":
+        if normalize_n10_name(related) == normalize_n10_name(primitive):
+            await bm_charter_pick.send("❌ 不能把基元谱师自己关联给自己")
+            return
+        if is_primitive(related):
+            await bm_charter_pick.send(
+                f"❌ 「{related}」已是基元谱师名义（本名），不能作为关联名义"
+            )
+            return
+        if not add_related(primitive, related):
+            await bm_charter_pick.send(f"❌ 「{related}」与「{primitive}」已存在关联")
+            return
+        save_charters(_CHARTERS_PATH)
+        await bm_charter_pick.send(f"✅ 已关联：{primitive} ← {related}")
+    else:
+        if not remove_related(primitive, related):
+            await bm_charter_pick.send(f"❌ 「{related}」与「{primitive}」没有关联")
+            return
+        save_charters(_CHARTERS_PATH)
+        await bm_charter_pick.send(f"✅ 已解除：{primitive} 与 {related} 的关联")
+
+
+async def _handle_charter_name_input(qq: str, state: dict, text: str) -> None:
+    """等待输入谱师名义的阶段：搜索并执行关联/解除关联。"""
+    _charter_pending.pop(qq, None)
+    names = search_charters(SONG_CONSTANTS, text)
+    primitive = state["primitive"]
+    if not names:
+        await bm_charter_pick.send(f"❌ 未在定数表中找到谱师「{text}」")
+        return
+    if len(names) == 1:
+        await _apply_related_change(primitive, names[0], state["action"].split("_")[0])
+        return
+    _charter_pending[qq] = {
+        **state,
+        "action": f"{state['action']}_pick",
+        "names": names,
+        "expire": time.monotonic() + _SONG_PICK_TTL,
+    }
+    lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择："]
+    lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
+    await bm_charter_pick.send("\n".join(lines))
+
+
+async def _handle_charter_number_pick(qq: str, state: dict, index: int) -> None:
+    """序号选择阶段：按动作分发到对应流程。"""
+    action = state["action"]
+    if action == "chart_pick":
+        charts = state["charts"]
+        if index < 1 or index > len(charts):
+            await bm_charter_pick.send(f"❌ 序号无效（1-{len(charts)}）")
+            return
+        _charter_pending.pop(qq, None)
+        song, _diff = charts[index - 1]
+        await _send_song_detail(bm_charter_pick, qq, song)
+        return
+    names = state.get("names") or []
+    if index < 1 or index > len(names):
+        await bm_charter_pick.send(f"❌ 序号无效（1-{len(names)}）")
+        return
+    picked = names[index - 1]
+    _charter_pending.pop(qq, None)
+    if action == "charter_pick":
+        await _show_charter_charts(bm_charter_pick, qq, picked)
+    elif action == "setup_pick":
+        add_primitive(picked)
+        save_charters(_CHARTERS_PATH)
+        await bm_charter_pick.send(f"✅ 已将「{picked}」设为基元谱师名义（本名）")
+    elif action == "related_prim_pick":
+        await _ask_related_name(bm_charter_pick, qq, picked)
+    elif action == "remove_prim_pick":
+        await _ask_remove_name(bm_charter_pick, qq, picked)
+    elif action == "related_pick":
+        await _apply_related_change(state["primitive"], picked, "related")
+    elif action == "remove_pick":
+        await _apply_related_change(state["primitive"], picked, "remove")
+
+
+@bm_charter_pick.handle()
+async def handle_charter_pick(event: MessageEvent) -> None:
+    """谱师流程的序号/名义输入选择（含基元谱师管理的多步流程）。"""
+    qq = str(event.user_id)
+    state = _charter_pending.get(qq)
+    if state is None:
+        return
+    if time.monotonic() > state["expire"]:
+        _charter_pending.pop(qq, None)
+        return
+    text = event.get_plaintext().strip()
+    # 等待输入「谱师名义」的阶段：收到的是名字而非序号
+    if state["action"] in ("related_name", "remove_name"):
+        if text:
+            await _handle_charter_name_input(qq, state, text)
+        return
+    if text.isdigit():
+        await _handle_charter_number_pick(qq, state, int(text))

@@ -127,6 +127,9 @@ _HEADER_MATCHERS = (
     ("RL", lambda t: "REALITY谱面难度" in t),
     ("IL", lambda t: "ILLUSION谱面难度" in t),
     ("TT", lambda t: "TWIST谱面难度" in t),
+    ("charterRL", lambda t: "REALITY谱面谱师" in t),
+    ("charterIL", lambda t: "ILLUSION谱面谱师" in t),
+    ("charterTT", lambda t: "TWIST谱面谱师" in t),
     ("extraType", lambda t: t == "追加谱面"),
     ("extraCharter", lambda t: "追加谱面谱师" in t),
     ("extraConst", lambda t: "追加谱面难度" in t),
@@ -164,6 +167,40 @@ def _title_text(value: str | float | None) -> str:
     return str(value or "").strip()
 
 
+def _extract_charter(
+    row: list[str | float | None],
+    indices: dict[str, int],
+    *,
+    extra_valid: bool,
+) -> dict[str, str]:
+    """提取谱师字段：难度 -> 谱师名义（仅非空；含追加谱面谱师）。
+
+    ``extra_valid`` 为 False 时忽略追加谱面谱师（对应定数解析失败的谱面）。
+    """
+
+    def at(key: str) -> str | float | None:
+        index = indices.get(key)
+        return row[index] if index is not None and index < len(row) else None
+
+    charter: dict[str, str] = {}
+    for diff, key in (
+        ("RL", "charterRL"),
+        ("IL", "charterIL"),
+        ("TT", "charterTT"),
+    ):
+        if key in indices:
+            charter_name = str(at(key) or "").strip()
+            if charter_name:
+                charter[diff] = charter_name
+    if extra_valid and "extraCharter" in indices:
+        extra_charter = str(at("extraCharter") or "").strip()
+        if extra_charter:
+            target = _EXTRA_TYPE_MAP.get(str(at("extraType") or "").strip().upper())
+            if target:
+                charter[target] = extra_charter
+    return charter
+
+
 def _parse_entry(
     row: list[str | float | None], indices: dict[str, int]
 ) -> tuple[str, dict] | None:
@@ -193,6 +230,8 @@ def _parse_entry(
         "aliases": [],
         "artist": str(at("artist") or "").strip() if "artist" in indices else "",
         "originalName": original_name,
+        # 谱师：难度 -> 谱师名义（仅非空；合作名义保留原文如 A&B&C）
+        "charter": {},
     }
     if not entry["originalName"]:
         entry["originalName"] = title
@@ -202,6 +241,7 @@ def _parse_entry(
             for alias in re.split(r"[,，]", str(at("aliases") or ""))
             if alias.strip()
         ]
+    extra_const: float | None = None
     if "extraType" in indices and "extraConst" in indices:
         extra_type = str(at("extraType") or "").strip().upper()
         extra_const = _parse_constant(at("extraConst"))
@@ -209,6 +249,9 @@ def _parse_entry(
             target = _EXTRA_TYPE_MAP.get(extra_type)
             if target:
                 entry[target] = extra_const
+    entry["charter"] = _extract_charter(
+        row, indices, extra_valid=extra_const is not None
+    )
     return title, entry
 
 

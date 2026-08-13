@@ -17,9 +17,16 @@
 | `/bmnamelist` | 查看全部别名对应关系（白名单） |
 | `/bmaddtowhitelist <QQ>` | 添加白名单成员（仅超管） |
 | `/bmremovefromwhitelist <QQ>` | 移除白名单成员（仅超管） |
+| `/bmcharter <谱师>` | 按谱师查询谱面（模糊搜索，多结果回复序号；自动扩展关联名义组） |
+| `/bmsetuptheprimitivecharter <谱师>` | 设置基元谱师名义（本名，须能在定数表中查到）（白名单） |
+| `/bmrelatedcharter <基元谱师>` | 添加基元谱师名义的马甲/合作名义（须能在定数表中查到）（白名单） |
+| `/bmremoverelatedcharter <基元谱师>` | 解除基元谱师名义与另一名义的关联（白名单） |
+| `/bmrelatedcharterlist` | 列出所有基元谱师与其关联名义（白名单） |
 | `/bmbotversion` | 查看 bot 版本 |
 
 > 中文匹配：支持简体中文匹配繁体中文与日本汉字（借助 OpenCC + 内置日文汉字映射 + 定数表的「原曲名」列）。
+>
+> 谱师关联：部分谱师有马甲或合作名义（如 `BZAIG&LeadLink&霜炎`）。先用 `bmsetuptheprimitivecharter` 把本名设为基元，再用 `bmrelatedcharter` 关联其他名义；之后 `bmcharter` 查询本名或任意关联名义都会输出整组谱面。
 
 ## 📦 环境要求
 
@@ -72,6 +79,7 @@ cp .env.example .env       # Windows: copy .env.example .env
 - 绑定存档按 QQ 拆分存储：`data/bm/bindings/<qq>.json`（内容含解密后的游戏存档，**不要提交到 git**）
 - 群聊中接收存档后会**自动撤回文件消息**（需 bot 为群管理员）；群文件上传方式会尝试删除群文件
 - 别名：`data/bm/aliases.json`；白名单：`data/bm/whitelist.json`（运行时增删）
+- 谱师关联：`data/bm/charters.json`（基元谱师名义与其马甲/合作名义，运行时增删）
 
 ## 🧮 算法（与官方查分器一致）
 

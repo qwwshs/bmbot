@@ -33,7 +33,9 @@ def parse_account_data(text: str) -> dict:
     - 包含 ``<RSAKeyValue>`` 标签 → 按原始存档 RSA 解密
     - 以 ``{`` 开头 → 直接按 JSON 解析
     """
-    text = text.strip()
+    # 入口兜底：剔除 NUL 等控制字符（UTF-16 无 BOM 存档被误按 UTF-8
+    # 解码后，NUL 会穿插在 <RSAKeyValue> 标签中间，必须先剔除才能识别）
+    text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text.strip())
     if "<RSAKeyValue>" in text and "</RSAKeyValue>" in text:
         return decrypt_save(text)
     if text.startswith("{"):
@@ -72,6 +74,8 @@ def decrypt_save(text: str) -> dict:
 
 def _split_key_and_cipher(text: str) -> tuple[str, str]:
     """从存档文本中分离私钥 XML 与密文（与 HTML 的拆分逻辑一致）。"""
+    # 兜底：剔除 NUL 等控制字符（UTF-16 无 BOM 存档按 UTF-8 解码后的产物）
+    text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
     start = text.find("<RSAKeyValue>")
     end = text.find("</RSAKeyValue>")
     if start == -1 or end == -1 or end <= start:
