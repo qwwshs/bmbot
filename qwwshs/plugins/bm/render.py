@@ -537,7 +537,6 @@ _CHART_LABEL_H = _CHART_CARD - _CHART_COVER_H  # 底部难度色矩形高（补�
 _CHART_PER_ROW = 5  # 每行歌曲数
 _CHART_GAP = 10
 _CHART_PAD = 14
-_CHART_BAND_GAP = 16  # 定数行（band）之间间距
 _CHART_HEADER_W = 110  # 每行最左定数表头宽度
 _CHART_TITLE_LINES = 2  # 曲名最多行数（固定占位高度）
 _CHART_TITLE_MAX = 11  # 曲名字号上限
@@ -545,6 +544,7 @@ _CHART_TITLE_MIN = 6  # 曲名字号下限（放不下时截断）
 _CHART_BG = (0, 0, 0)  # 纯黑背景
 _CHART_TEXT = (255, 255, 255)
 _CHART_DIVIDER = (60, 60, 60)
+_CHART_BAND_LINE = (128, 128, 128)  # 定数行分割线：白色 50% alpha（黑底合成）
 _CHART_PLACEHOLDER = (40, 40, 40)
 
 
@@ -673,9 +673,12 @@ def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
     band_heights: list[int] = []
     for _constant, items in ordered:
         rows = (len(items) + _CHART_PER_ROW - 1) // _CHART_PER_ROW
-        band_heights.append(rows * card_h)
+        band_heights.append(rows * _CHART_CARD + max(rows - 1, 0) * _CHART_GAP)
     height = (
-        _CHART_PAD + sum(band_heights) + _CHART_BAND_GAP * len(ordered) + _CHART_PAD
+        _CHART_PAD
+        + sum(band_heights)
+        + _CHART_GAP * max(len(ordered) - 1, 0)
+        + _CHART_PAD
     )
 
     img = Image.new("RGB", (width, height), _CHART_BG)
@@ -704,15 +707,16 @@ def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
             cx = divider_x + 2 + col * (_CHART_CARD + _CHART_GAP)
             cy = y + row * card_h
             _draw_chart_card(img, draw, cx, cy, song, diff)
-        y += band_h + _CHART_BAND_GAP
-        # 相邻定数行之间的白色分割线（最后一行之后不画）
+        y += band_h
+        # 相邻定数行之间的分割线（白色 50% alpha；最后一行之后不画）
         if index < len(ordered) - 1:
-            line_y = y - _CHART_BAND_GAP // 2
+            line_y = y + _CHART_GAP // 2
             draw.line(
                 [(_CHART_PAD, line_y), (width - _CHART_PAD, line_y)],
-                fill=(255, 255, 255),
+                fill=_CHART_BAND_LINE,
                 width=1,
             )
+            y += _CHART_GAP
 
     buf = io.BytesIO()
     img.save(buf, "PNG")
