@@ -971,7 +971,7 @@ def _draw_grade_matrix(
     """等级分布表：字号与曲名相同（CARD2_TITLE_MAX），黑色背景无边框。
 
     ``right`` 为空时靠左（CARD2_PAD），否则整表右对齐到 ``right``；
-    等级行用文字（等级色），F 行不显示标签。
+    等级行用文字（等级色）。
     返回外框底边 y。
     """
     font = _font(CARD2_TITLE_MAX, bold=True)
@@ -1001,14 +1001,13 @@ def _draw_grade_matrix(
     y += row_h
     for grade in GRADES:
         cy = y + row_h // 2
-        if grade != "F":
-            draw.text(
-                (left, cy),
-                grade,
-                font=font,
-                fill=GRADE_COLORS[grade],
-                anchor="lm",
-            )
+        draw.text(
+            (left, cy),
+            grade,
+            font=font,
+            fill=GRADE_COLORS[grade],
+            anchor="lm",
+        )
         for index, diff in enumerate(ALL_DIFFS):
             draw.text(
                 (left + label_w + index * col_w + col_w // 2, cy),
