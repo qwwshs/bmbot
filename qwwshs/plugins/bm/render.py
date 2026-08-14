@@ -931,6 +931,7 @@ CHAR_AVATAR_FILES = {
     "Helios": "Helios1",
     "LWY": "Luvia",
     "Luna": "Luna Ambrosia",
+    "Winebibber": "XJX",
     # EName 形式兜底（存档若直接存英文名）
     "Ankie": "Anki",
     "Sèat": "Seat",
