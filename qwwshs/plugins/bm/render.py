@@ -912,14 +912,20 @@ CARD2_RATING_BADGE = (255, 24, 48)  # Rating 徽章颜色 #FF1830
 
 _avatar_cache: dict[str, Image.Image | None] = {}
 
+# 存档角色名 → images/ 头像文件名对照（部分角色名称与图片文件名不一致）
+CHAR_AVATAR_FILES = {
+    "RA-S": "Ras",
+}
+
 
 def _load_avatar(name: str | None) -> Image.Image | None:
-    """加载角色头像（images/<角色名>.png），缩放到 CARD2_AVATAR。"""
+    """加载角色头像（images/<角色名>.png，名称不一致时查 CHAR_AVATAR_FILES）。"""
     if not name:
         return None
     if name not in _avatar_cache:
         image = None
-        path = IMAGE_DIR / f"{name}.png"
+        filename = CHAR_AVATAR_FILES.get(name, name)
+        path = IMAGE_DIR / f"{filename}.png"
         if path.exists():
             try:
                 with Image.open(path) as im:
