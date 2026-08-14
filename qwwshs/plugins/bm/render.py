@@ -1329,18 +1329,20 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     return y + rows * (CARD2_PLATE_H + CARD2_GAP)
 
 
-def render_card_new(
+def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     player_name: str,
     result: RatingResult,
     grade_counts: dict[str, dict[str, int]],
     _archive_potential: object = None,
     character: str | None = None,
+    glass: object = None,
+    coin: object = None,
 ) -> bytes:
     """渲染新版查分卡，返回 PNG 字节。
 
     头部：左上角角色头像（按存档 CharSelect 选择）+ 名字条（玩家名居中），
-    名字条右下角 Rating 徽章，右上角等级分布表（等级行用 score/ 图片）；
-    B30/N10 网格（每行 5 首）。
+    名字条右下角 Rating 徽章，玩家名下方光锥琥珀/珂灵币条（居中数字），
+    右上角等级分布表；B30/N10 网格（每行 5 首）。
     """
     card_w = CARD2_PLATE_W
     width = CARD2_PER_ROW * card_w + (CARD2_PER_ROW - 1) * CARD2_GAP + 2 * CARD2_PAD
@@ -1435,6 +1437,28 @@ def render_card_new(
         fill=(255, 255, 255),
         anchor="mm",
     )
+    # 光锥琥珀 / 珂灵币：玩家名下方一点，图标条 + 居中数字
+    name_cx = int((name_mid + CARD2_NAME_BAR_W) / 2)
+    coin_y = bar_bottom + 8
+    for icon_name, count in (("光锥琥珀 1.png", glass), ("珂灵币 1.png", coin)):
+        if count is None:
+            continue
+        icon = _load_ui_texture(icon_name)
+        if icon is None:
+            continue
+        icon_h = 44
+        icon_w = max(1, round(icon.width * icon_h / icon.height))
+        icon = icon.resize((icon_w, icon_h), Image.Resampling.LANCZOS)
+        icon_x = name_cx - icon_w // 2
+        img.paste(icon, (icon_x, coin_y), icon)
+        draw.text(
+            (icon_x + icon_w // 2, coin_y + icon_h // 2),
+            f"{count}",
+            font=_font(26, bold=True),
+            fill=(255, 255, 255),
+            anchor="mm",
+        )
+        coin_y += icon_h + 8
     # 等级分布：右上角（保持大小）
     _draw_grade_matrix(
         img, draw, CARD2_AVATAR_TOP, grade_counts, right=width - CARD2_PAD
