@@ -886,8 +886,8 @@ CARD2_BASE = 30  # 普通文字字号（GOAL/定数，加粗）
 CARD2_SCORE = 44  # 分数字号（加粗；48 时 7 位满分溢出文字区）
 CARD2_TITLE_MAX = 33  # 曲名字号（原 22 的 1.5 倍；单行，过长截断加 …）
 CARD2_GOAL = (204, 204, 204)  # GOAL 行颜色：alpha 80%
-CARD2_INK_GAP = 10  # 文字行间墨迹最小间距
-CARD2_POT_FONT = CARD2_BASE // 2  # rating 潜力字号（定数的一半）
+CARD2_INK_GAP = 10  # 文字行间墨迹目标间距（徽章上方放不下时收紧）
+CARD2_POT_FONT = CARD2_BASE  # rating 潜力字号（与定数相同，原 15 的两倍）
 CARD2_GRADE_H = 60  # 评级图高度（原 90 的 2/3），放底板右下角
 CARD2_GRADE_M = 10  # 评级图右下边距
 CARD2_GAP = 12  # 卡片间距
@@ -1096,9 +1096,9 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
 ) -> None:
     """新版单曲卡：2:1 不透明圆角底板，内嵌 0.9 高曲绘（四边等距）。
 
-    右侧文字区：曲名上边缘与曲绘齐平、行间墨迹间隔 10px（无分割线、无序号）：
-    曲名（单行，过长截断加 …）/ 分数 / ->GOAL（alpha 80%）/ 定数 /
-    rating:潜力（定数的一半字号）；评级图片放底板右下角。
+    右侧文字区：曲名上边缘与曲绘齐平、行距优先 10px（徽章上方放不下时收紧）：
+    曲名（单行，过长截断加 …）/ 分数 / ->GOAL（alpha 80%）/
+    rating:潜力（与定数同字号）/ 定数；评级图片放底板右下角。
     """
     color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
     draw.rounded_rectangle(
@@ -1126,7 +1126,8 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
             anchor="mm",
         )
 
-    # 右侧文字区：曲名上边缘与曲绘齐平，行间墨迹间隔 CARD2_INK_GAP
+    # 右侧文字区：曲名上边缘与曲绘齐平；行距优先 CARD2_INK_GAP，
+    # 若评级徽章上方放不下则收紧，保证 rating 潜力行完整在徽章上方
     lx = cx + CARD2_COVER + CARD2_TEXT_GAP
     right = x + CARD2_PLATE_W - CARD2_TEXT_PAD
     ink_top = y + CARD2_COVER_M
@@ -1136,50 +1137,65 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     title_text = _ellipsize(
         draw, chart.original_name or chart.name, title_font, right - lx
     )
+    score_text = f"{chart.score}"
+    goal_text = f"->{goal}" if goal is not None and goal > 0 else f"->{chart.score}"
+    const_text = f"{chart.constant:.1f}"
+    pot_text = f"rating:{chart.potential:.3f}"
+
+    # 预计算各行墨迹范围，行距自适应
     t_top, t_bottom = _text_ink(title_text, CARD2_TITLE_MAX, bold=True)
+    s_top, s_bottom = _text_ink(score_text, CARD2_SCORE, bold=True)
+    g_top, g_bottom = _text_ink(goal_text, CARD2_BASE, bold=True)
+    p_top, p_bottom = _text_ink(pot_text, CARD2_POT_FONT, bold=True)
+    c_top, _ = _text_ink(const_text, CARD2_BASE, bold=True)
+    badge_top = y + CARD2_PLATE_H - CARD2_GRADE_M - CARD2_GRADE_H
+    span_sum = (
+        (t_bottom - t_top)
+        + (s_bottom - s_top)
+        + (g_bottom - g_top)
+        + (p_bottom - p_top)
+    )
+    gap = max(
+        0,
+        min(CARD2_INK_GAP, (badge_top - (y + CARD2_COVER_M) - span_sum) // 3),
+    )
+
+    # 曲名（单行，过长截断加 …）
     draw.text((lx, ink_top - t_top), title_text, font=title_font, fill=(255, 255, 255))
-    ink_top += t_bottom - t_top + CARD2_INK_GAP
+    ink_top += t_bottom - t_top + gap
 
     # 分数
-    score_text = f"{chart.score}"
-    s_top, s_bottom = _text_ink(score_text, CARD2_SCORE, bold=True)
     draw.text(
         (lx, ink_top - s_top),
         score_text,
         font=_font(CARD2_SCORE, bold=True),
         fill=(255, 255, 255),
     )
-    ink_top += s_bottom - s_top + CARD2_INK_GAP
+    ink_top += s_bottom - s_top + gap
 
     # GOAL：->目标分数（alpha 80%）；无法推分显示 ->当前分数
-    goal_text = f"->{goal}" if goal is not None and goal > 0 else f"->{chart.score}"
-    g_top, g_bottom = _text_ink(goal_text, CARD2_BASE, bold=True)
     draw.text(
         (lx, ink_top - g_top),
         goal_text,
         font=_font(CARD2_BASE, bold=True),
         fill=CARD2_GOAL,
     )
-    ink_top += g_bottom - g_top + CARD2_INK_GAP
+    ink_top += g_bottom - g_top + gap
 
-    # 定数（左）
-    const_text = f"{chart.constant:.1f}"
-    c_top, c_bottom = _text_ink(const_text, CARD2_BASE, bold=True)
-    draw.text(
-        (lx, ink_top - c_top),
-        const_text,
-        font=_font(CARD2_BASE, bold=True),
-        fill=(255, 255, 255),
-    )
-    ink_top += c_bottom - c_top + CARD2_INK_GAP
-
-    # rating 潜力：定数下方，字号为定数的一半
-    pot_text = f"rating:{chart.potential:.3f}"
-    p_top, _ = _text_ink(pot_text, CARD2_POT_FONT, bold=True)
+    # rating 潜力：GOAL 下方、定数上方（与定数同字号）
     draw.text(
         (lx, ink_top - p_top),
         pot_text,
         font=_font(CARD2_POT_FONT, bold=True),
+        fill=(255, 255, 255),
+    )
+    ink_top += p_bottom - p_top + CARD2_INK_GAP
+
+    # 定数（最下方，靠左；横向不与评级徽章重叠）
+    draw.text(
+        (lx, ink_top - c_top),
+        const_text,
+        font=_font(CARD2_BASE, bold=True),
         fill=(255, 255, 255),
     )
 
