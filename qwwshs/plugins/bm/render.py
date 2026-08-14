@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import random
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -110,6 +111,23 @@ def _bundled_font_path() -> tuple[str, int] | None:
                     break
         return (path, index)
     return None
+
+
+# 新版查分卡底部背景图（ui/bg/，每次随机一张）
+_BG_DIR = Path(__file__).resolve().parent / "ui" / "bg"
+
+
+def _random_bg() -> Image.Image | None:
+    """从 ui/bg/ 随机选一张背景图，未找到返回 None。"""
+    paths = sorted(
+        p for p in _BG_DIR.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg")
+    )
+    if not paths:
+        return None
+    try:
+        return Image.open(random.choice(paths)).convert("RGBA")
+    except OSError:
+        return None
 
 
 # 中日文字体候选：Windows 与常见 Linux 发行版路径
@@ -1356,6 +1374,20 @@ def render_card_new(
     )
     # 等级分布：右上角（保持大小）
     _draw_grade_matrix(draw, CARD2_AVATAR_TOP, grade_counts, right=width - CARD2_PAD)
+
+    # 底部背景：随机 ui/bg 图片铺满（保持比例居中裁剪），网格画在其上
+    bg = _random_bg()
+    if bg is not None:
+        bg_top = header_h
+        area_h = height - bg_top
+        scale = max(width / bg.width, area_h / bg.height)
+        new_w = max(1, round(bg.width * scale))
+        new_h = max(1, round(bg.height * scale))
+        bg = bg.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        left = (new_w - width) // 2
+        top_off = (new_h - area_h) // 2
+        bg = bg.crop((left, top_off, left + width, top_off + area_h))
+        img.paste(bg, (0, bg_top), bg)
 
     y = header_h + 24
 
