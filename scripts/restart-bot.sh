@@ -1,6 +1,6 @@
 #!/bin/bash
 # 拉取最新代码并重启 bot（screen 会话名 nb）。
-# 用法：bash /home/admin/nbbot/qwwshs/qwwshs/scripts/restart-bot.sh
+# 用法：bash /home/admin/nbbot/qwwshs/scripts/restart-bot.sh
 set -e
 export PATH="$HOME/.local/bin:$PATH"
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
