@@ -835,8 +835,15 @@ def render_list_image(text: str) -> bytes:
 # 新版查分卡（/bmrating 默认样式）
 # ================================================================
 
-CARD2_COVER = 140  # 曲绘 1:1 边长
-CARD2_PLATE_W = 187  # 底板 4:3 宽（高度与曲绘相同）
+CARD2_PLATE_H = 220  # 底板高度
+CARD2_PLATE_W = 2 * CARD2_PLATE_H  # 底板宽度（2:1）
+CARD2_COVER = int(CARD2_PLATE_H * 0.75)  # 曲绘 1:1 边长 = 底板高的 0.75
+CARD2_COVER_X = CARD2_PLATE_W // 4  # 曲绘左边距 = 底板宽的 1/4
+CARD2_TEXT_GAP = 12  # 曲绘右缘与右侧文字区间距
+CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
+CARD2_RADIUS = 16  # 底板圆角半径
+CARD2_BASE = 16  # 基准字号（分数为其他文字的 2 倍）
+CARD2_GOAL = (75, 75, 75)  # GOAL 行颜色：alpha 75
 CARD2_GAP = 12  # 卡片间距
 CARD2_PER_ROW = 5  # 每行卡片数
 CARD2_PAD = 30
@@ -845,16 +852,6 @@ CARD2_TEXT = (240, 240, 240)
 CARD2_MUTED = (150, 150, 150)
 CARD2_DIVIDER = (70, 70, 70)
 CARD2_ACCENT = (220, 220, 220)
-
-# 难度全名（与 bmchartlist 相同的难度色见 CHART_DIFF_COLORS）
-DIFF_FULL_NAMES = {
-    "RL": "REALITY",
-    "IL": "ILLUSION",
-    "TT": "TWIST",
-    "RU": "RUIN",
-    "DM": "DREAMY",
-    "FL": "FOOL",
-}
 
 
 def _draw_matrix_compact(
@@ -908,72 +905,102 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     chart: Chart,
     goal: int | None,
 ) -> None:
-    """新版单曲卡：1:1 曲绘 + 右侧 4:3 难度色底板（文字靠左，占满高度）。"""
+    """新版单曲卡：2:1 难度色圆角底板，内嵌 0.75 高曲绘（纵向居中、左边距 1/4）。
+
+    右侧文字区从上到下：曲名（固定两行高）/ 分割线 / 分数（2 倍字号）/
+    ->GOAL（alpha 75，无法推分显示 ->分数）/ 评级（靠右）；
+    曲绘下方条带：左序号、右定数。无难度文字。
+    """
+    color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
+    draw.rounded_rectangle(
+        [x, y, x + CARD2_PLATE_W - 1, y + CARD2_PLATE_H - 1],
+        radius=CARD2_RADIUS,
+        fill=color,
+    )
+    # 曲绘：缩到底板高的 0.75、纵向居中、左边距为底板宽的 1/4
+    cx = x + CARD2_COVER_X
+    cy = y + (CARD2_PLATE_H - CARD2_COVER) // 2
     cover = load_cover(chart.name, chart.diff)
     if cover is not None:
         cover = cover.resize((CARD2_COVER, CARD2_COVER), Image.Resampling.LANCZOS)
-        img.paste(cover, (x, y))
+        img.paste(cover, (cx, cy))
     else:
         draw.rectangle(
-            [x, y, x + CARD2_COVER - 1, y + CARD2_COVER - 1], fill=(40, 40, 40)
+            [cx, cy, cx + CARD2_COVER - 1, cy + CARD2_COVER - 1],
+            fill=(40, 40, 40),
         )
         draw.text(
-            (x + CARD2_COVER // 2, y + CARD2_COVER // 2),
+            (cx + CARD2_COVER // 2, cy + CARD2_COVER // 2),
             "♪",
             font=_font(40),
             fill=(120, 120, 120),
             anchor="mm",
         )
-    # 底板（难度色，与 bmchartlist 相同）
-    px = x + CARD2_COVER
-    color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
-    draw.rectangle([px, y, px + CARD2_PLATE_W - 1, y + CARD2_COVER - 1], fill=color)
-    lx = px + 9  # 文字靠左
-    text_w = CARD2_PLATE_W - 18
-    # 曲名：固定两行高度（字号自适应），保证任何情况下高度一致
+
+    # 右侧文字区：总高度为底板高的 0.75，整体纵向居中，剩余空隙均分
+    lx = cx + CARD2_COVER + CARD2_TEXT_GAP
+    right = x + CARD2_PLATE_W - CARD2_TEXT_PAD
+    block_h = int(CARD2_PLATE_H * 0.75)
+    top = y + (CARD2_PLATE_H - block_h) // 2
+    title_h = 2 * (CARD2_BASE + 2)
+    divider_h = 2
+    score_h = CARD2_BASE * 2 + 10
+    goal_h = CARD2_BASE + 4
+    grade_h = CARD2_BASE + 4
+    content_h = title_h + divider_h + score_h + goal_h + grade_h
+    gap, extra = divmod(block_h - content_h, 4)
+
+    # 曲名：固定两行高度（字号自适应），任何情况下高度一致
     lines, size = _fit_chart_title(
-        draw, chart.original_name or chart.name, text_w, max_size=15, min_size=9
+        draw,
+        chart.original_name or chart.name,
+        right - lx,
+        max_size=CARD2_BASE,
+        min_size=10,
     )
+    ty = top
     line_h = size + 2
-    ty = y + 8
     for line in lines:
         draw.text((lx, ty), line, font=_font(size), fill=(255, 255, 255))
         ty += line_h
-    # 难度全名 + 定数
-    ty += 5
+    # 分割线（曲名与分数之间）
+    ty = top + title_h + gap + extra
+    draw.line([(lx, ty), (right, ty)], fill=(255, 255, 255), width=divider_h)
+    # 分数：其他字体的 2 倍
+    ty += divider_h + gap
     draw.text(
-        (lx, ty),
-        f"{DIFF_FULL_NAMES.get(chart.diff, chart.diff)} {chart.constant:.1f}",
-        font=_font(14, bold=True),
-        fill=(255, 255, 255),
+        (lx, ty), f"{chart.score}", font=_font(CARD2_BASE * 2), fill=(255, 255, 255)
     )
-    ty += 19
-    # 等级（在前，按等级色）+ 分数
-    grade = get_grade(chart.score)
-    grade_font = _font(14, bold=True)
-    score_font = _font(14)
-    draw.text((lx, ty), grade, font=grade_font, fill=GRADE_COLORS[grade])
-    score_x = lx + grade_font.getlength(grade) + 8
-    draw.text((score_x, ty), f"{chart.score}", font=score_font, fill=(255, 255, 255))
-    ty += 19
-    # GOAL（推分目标，位于分数与 Potential 之间）
+    # GOAL：->目标分数（alpha 75）；无法推分显示 ->当前分数
+    ty += score_h + gap
     if goal is not None:
-        goal_text = f"GOAL {goal}" if goal > 0 else "GOAL 无法推分"
-        draw.text((lx, ty), goal_text, font=_font(13), fill=(255, 255, 255))
-        ty += 18
-    # Potential
+        goal_text = f"->{goal}" if goal > 0 else f"->{chart.score}"
+        draw.text((lx, ty), goal_text, font=_font(CARD2_BASE), fill=CARD2_GOAL)
+    # 评级：靠右
+    ty += goal_h + gap
+    grade = get_grade(chart.score)
     draw.text(
-        (lx, ty),
-        f"Potential:{chart.potential:.3f}",
-        font=_font(13),
-        fill=(255, 255, 255),
+        (right, ty),
+        grade,
+        font=_font(CARD2_BASE, bold=True),
+        fill=GRADE_COLORS[grade],
+        anchor="ra",
     )
-    # 序号（最后一行，贴底；draw.text 默认顶部锚点）
+    # 曲绘下方条带（曲绘下缘到底板下缘）：左序号、右定数
+    strip_cy = (cy + CARD2_COVER + y + CARD2_PLATE_H) // 2
     draw.text(
-        (lx, y + CARD2_COVER - 9 - 15),
+        (cx, strip_cy),
         rank_label,
-        font=_font(15, bold=True),
+        font=_font(CARD2_BASE, bold=True),
         fill=(255, 255, 255),
+        anchor="lm",
+    )
+    draw.text(
+        (right, strip_cy),
+        f"{chart.constant:.1f}",
+        font=_font(CARD2_BASE),
+        fill=(255, 255, 255),
+        anchor="rm",
     )
 
 
@@ -993,12 +1020,12 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     y += 34
     draw.line([(CARD2_PAD, y), (img.width - CARD2_PAD, y)], fill=CARD2_DIVIDER, width=2)
     y += 14
-    card_w = CARD2_COVER + CARD2_PLATE_W
+    card_w = CARD2_PLATE_W + CARD2_GAP
     for index, chart in enumerate(charts):
         col = index % CARD2_PER_ROW
         row = index // CARD2_PER_ROW
-        cx = CARD2_PAD + col * (card_w + CARD2_GAP)
-        cy = y + row * (CARD2_COVER + CARD2_GAP)
+        cx = CARD2_PAD + col * card_w
+        cy = y + row * (CARD2_PLATE_H + CARD2_GAP)
         goal = None
         if goal_factors:
             goal = target_score_for_increase(
@@ -1009,7 +1036,7 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
                 goal_factors[index],
             )
         _draw_rating_card_new(img, draw, cx, cy, f"{prefix}{index + 1}", chart, goal)
-    return y + rows * (CARD2_COVER + CARD2_GAP)
+    return y + rows * (CARD2_PLATE_H + CARD2_GAP)
 
 
 def render_card_new(
@@ -1022,12 +1049,12 @@ def render_card_new(
 
     左上角标题/用户名/RATING + 右侧等级分布，B30/N10 网格（每行 5 首）。
     """
-    card_w = CARD2_COVER + CARD2_PLATE_W
+    card_w = CARD2_PLATE_W
     width = CARD2_PER_ROW * card_w + (CARD2_PER_ROW - 1) * CARD2_GAP + 2 * CARD2_PAD
     header_h = max(32 + 42 + 36, 24 + len(GRADES) * 21) + 24
     b30_rows = (len(result.b30_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
     n10_rows = (len(result.n10_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
-    grid_h = CARD2_COVER + CARD2_GAP
+    grid_h = CARD2_PLATE_H + CARD2_GAP
     section_h = 24 + 34 + 14
     height = (
         CARD2_PAD
