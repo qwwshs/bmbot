@@ -1138,14 +1138,14 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
         draw, chart.original_name or chart.name, title_font, right - lx
     )
     score_text = f"{chart.score}"
-    goal_text = f"->{goal}" if goal is not None and goal > 0 else f"->{chart.score}"
+    goal_number = f"{goal}" if goal is not None and goal > 0 else f"{chart.score}"
     const_text = f"{chart.constant:.1f}"
     pot_text = f"rating:{chart.potential:.3f}"
 
     # 预计算各行墨迹范围，行距自适应
     t_top, t_bottom = _text_ink(title_text, CARD2_TITLE_MAX, bold=True)
     s_top, s_bottom = _text_ink(score_text, CARD2_SCORE, bold=True)
-    g_top, g_bottom = _text_ink(goal_text, CARD2_BASE, bold=True)
+    g_top, g_bottom = _text_ink(">" + goal_number, CARD2_BASE, bold=True)
     p_top, p_bottom = _text_ink(pot_text, CARD2_POT_FONT, bold=True)
     c_top, _ = _text_ink(const_text, CARD2_BASE, bold=True)
     badge_top = y + CARD2_PLATE_H - CARD2_GRADE_M - CARD2_GRADE_H
@@ -1173,10 +1173,18 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     )
     ink_top += s_bottom - s_top + gap
 
-    # GOAL：->目标分数（alpha 80%）；无法推分显示 ->当前分数
+    # GOAL：->目标分数（alpha 80%）；无法推分显示 ->当前分数。
+    # Dream Han 的 "-" 字形位置偏低，横线改为在数字/箭头中部高度绘制，保证对齐
+    arrow_w = int(_font(CARD2_BASE, bold=True).getlength("-"))
+    arrow_cy = ink_top + (g_bottom - g_top) // 2
+    draw.line(
+        [(lx, arrow_cy), (lx + arrow_w, arrow_cy)],
+        fill=CARD2_GOAL,
+        width=2,
+    )
     draw.text(
-        (lx, ink_top - g_top),
-        goal_text,
+        (lx + arrow_w + 3, ink_top - g_top),
+        ">" + goal_number,
         font=_font(CARD2_BASE, bold=True),
         fill=CARD2_GOAL,
     )
