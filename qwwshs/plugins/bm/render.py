@@ -576,23 +576,28 @@ def _wrap_lines(
     return lines
 
 
-def _fit_chart_title(
-    draw: ImageDraw.ImageDraw, text: str, max_w: int
+def _fit_chart_title(  # noqa: PLR0913, PLR0917
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    max_w: int,
+    max_size: int = _CHART_TITLE_MAX,
+    min_size: int = _CHART_TITLE_MIN,
+    max_lines: int = _CHART_TITLE_LINES,
 ) -> tuple[list[str], int]:
     """曲名换行适配：字号递减到可在固定行数内放下，放不下截断。"""
-    for size in range(_CHART_TITLE_MAX, _CHART_TITLE_MIN - 1, -1):
+    for size in range(max_size, min_size - 1, -1):
         font = _font(size)
-        lines = _wrap_lines(draw, text, font, max_w, _CHART_TITLE_LINES)
+        lines = _wrap_lines(draw, text, font, max_w, max_lines)
         if lines is not None:
             return lines, size
-    font = _font(_CHART_TITLE_MIN)
+    font = _font(min_size)
     truncated = text
     while True:
-        lines = _wrap_lines(draw, truncated + "…", font, max_w, _CHART_TITLE_LINES)
+        lines = _wrap_lines(draw, truncated + "…", font, max_w, max_lines)
         if lines is not None:
-            return lines, _CHART_TITLE_MIN
+            return lines, min_size
         if not truncated:
-            return [""], _CHART_TITLE_MIN
+            return [""], min_size
         truncated = truncated[:-1]
 
 
@@ -901,8 +906,9 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     y: int,
     rank_label: str,
     chart: Chart,
+    goal: int | None,
 ) -> None:
-    """新版单曲卡：1:1 曲绘 + 右侧 4:3 难度色底板。"""
+    """新版单曲卡：1:1 曲绘 + 右侧 4:3 难度色底板（文字靠左，占满高度）。"""
     cover = load_cover(chart.name, chart.diff)
     if cover is not None:
         cover = cover.resize((CARD2_COVER, CARD2_COVER), Image.Resampling.LANCZOS)
@@ -922,64 +928,52 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     px = x + CARD2_COVER
     color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
     draw.rectangle([px, y, px + CARD2_PLATE_W - 1, y + CARD2_COVER - 1], fill=color)
-    cx = px + CARD2_PLATE_W // 2
-    text_w = CARD2_PLATE_W - 12
+    lx = px + 9  # 文字靠左
+    text_w = CARD2_PLATE_W - 18
     # 曲名：固定两行高度（字号自适应），保证任何情况下高度一致
-    lines, size = _fit_chart_title(draw, chart.original_name or chart.name, text_w)
-    line_h = size + 1
-    ty = y + 7
-    for line in lines:
-        draw.text((cx, ty), line, font=_font(size), fill=(255, 255, 255), anchor="ma")
-        ty += line_h
-    ty += 6
-    # 难度全名 + 定数
-    draw.text(
-        (cx, ty),
-        f"{DIFF_FULL_NAMES.get(chart.diff, chart.diff)} {chart.constant:.1f}",
-        font=_font(11),
-        fill=(255, 255, 255),
-        anchor="ma",
+    lines, size = _fit_chart_title(
+        draw, chart.original_name or chart.name, text_w, max_size=15, min_size=9
     )
-    ty += 15
+    line_h = size + 2
+    ty = y + 8
+    for line in lines:
+        draw.text((lx, ty), line, font=_font(size), fill=(255, 255, 255))
+        ty += line_h
+    # 难度全名 + 定数
+    ty += 5
+    draw.text(
+        (lx, ty),
+        f"{DIFF_FULL_NAMES.get(chart.diff, chart.diff)} {chart.constant:.1f}",
+        font=_font(14, bold=True),
+        fill=(255, 255, 255),
+    )
+    ty += 19
     # 等级（在前，按等级色）+ 分数
     grade = get_grade(chart.score)
-    grade_font = _font(11, bold=True)
-    score_font = _font(11)
-    grade_w = grade_font.getlength(grade)
-    score_w = score_font.getlength(str(chart.score))
-    gap = 6
-    total_w = grade_w + gap + score_w
-    draw.text(
-        (cx - total_w / 2 + grade_w / 2, ty),
-        grade,
-        font=grade_font,
-        fill=GRADE_COLORS[grade],
-        anchor="ma",
-    )
-    draw.text(
-        (cx + total_w / 2 - score_w / 2, ty),
-        f"{chart.score}",
-        font=score_font,
-        fill=(255, 255, 255),
-        anchor="ma",
-    )
-    ty += 15
+    grade_font = _font(14, bold=True)
+    score_font = _font(14)
+    draw.text((lx, ty), grade, font=grade_font, fill=GRADE_COLORS[grade])
+    score_x = lx + grade_font.getlength(grade) + 8
+    draw.text((score_x, ty), f"{chart.score}", font=score_font, fill=(255, 255, 255))
+    ty += 19
+    # GOAL（推分目标，位于分数与 Potential 之间）
+    if goal is not None:
+        goal_text = f"GOAL {goal}" if goal > 0 else "GOAL 无法推分"
+        draw.text((lx, ty), goal_text, font=_font(13), fill=(255, 255, 255))
+        ty += 18
     # Potential
     draw.text(
-        (cx, ty),
+        (lx, ty),
         f"Potential:{chart.potential:.3f}",
-        font=_font(11),
+        font=_font(13),
         fill=(255, 255, 255),
-        anchor="ma",
     )
-    ty += 17
-    # 序号（最后一行）
+    # 序号（最后一行，贴底；draw.text 默认顶部锚点）
     draw.text(
-        (cx, ty),
+        (lx, y + CARD2_COVER - 9 - 15),
         rank_label,
-        font=_font(13, bold=True),
+        font=_font(15, bold=True),
         fill=(255, 255, 255),
-        anchor="ma",
     )
 
 
@@ -991,8 +985,9 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     charts: list,
     prefix: str,
     rows: int,
+    goal_factors: list[float] | None,
 ) -> int:
-    """新版分区：标题 + 分割线 + 网格（每行 5 首）。"""
+    """新版分区：标题 + 分割线 + 网格（每行 5 首，含 GOAL 推分目标）。"""
     y += 24
     draw.text((CARD2_PAD, y), title, font=_font(30, bold=True), fill=CARD2_TEXT)
     y += 34
@@ -1004,7 +999,16 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
         row = index // CARD2_PER_ROW
         cx = CARD2_PAD + col * (card_w + CARD2_GAP)
         cy = y + row * (CARD2_COVER + CARD2_GAP)
-        _draw_rating_card_new(img, draw, cx, cy, f"{prefix}{index + 1}", chart)
+        goal = None
+        if goal_factors:
+            goal = target_score_for_increase(
+                chart.score,
+                chart.potential,
+                chart.constant,
+                GOAL_INCREASE,
+                goal_factors[index],
+            )
+        _draw_rating_card_new(img, draw, cx, cy, f"{prefix}{index + 1}", chart, goal)
     return y + rows * (CARD2_COVER + CARD2_GAP)
 
 
@@ -1060,8 +1064,14 @@ def render_card_new(
     )
     y = CARD2_PAD + header_h
 
-    y = _draw_rating_section_new(img, draw, y, "B30", result.b30_charts, "B", b30_rows)
-    y = _draw_rating_section_new(img, draw, y, "N10", result.n10_charts, "N", n10_rows)
+    b30_factors = [b30_goal_factor()] * len(result.b30_charts)
+    n10_factors = [n10_goal_factor(i) for i in range(len(result.n10_charts))]
+    y = _draw_rating_section_new(
+        img, draw, y, "B30", result.b30_charts, "B", b30_rows, b30_factors
+    )
+    y = _draw_rating_section_new(
+        img, draw, y, "N10", result.n10_charts, "N", n10_rows, n10_factors
+    )
 
     buf = io.BytesIO()
     img.save(buf, "PNG")
