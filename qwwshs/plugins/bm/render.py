@@ -918,6 +918,7 @@ CARD2_TEXT_GAP = 12  # 曲绘右缘与右侧文字区间距
 CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
 CARD2_RADIUS = 20  # 底板圆角半径
 CARD2_MATRIX_RADIUS = 18  # 等级分布框圆角半径
+CARD2_SECTION_TEX_H = 52  # B30/N10 标题底板纹路2.png 高度
 CARD2_BASE = 30  # 普通文字字号（GOAL/定数，加粗）
 CARD2_SCORE = 44  # 分数字号（加粗；48 时 7 位满分溢出文字区）
 CARD2_TITLE_MAX = 33  # 曲名字号（原 22 的 1.5 倍；单行，过长截断加 …）
@@ -1287,21 +1288,19 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     rows: int,
     goal_factors: list[float] | None,
 ) -> int:
-    """新版分区：纹路2.png 底板 + 居中标题 + 网格（每行 5 首，含 GOAL 推分目标）。"""
-    grid_h = CARD2_PLATE_H + CARD2_GAP
-    section_h = 24 + 34 + 14 + rows * grid_h
-    # 纹路2.png 作为分区底板（保持比例铺满居中裁剪，卡片画在其上）
+    """新版分区：纹路2.png 标题底板 + 居中标题 + 网格（每行 5 首）。"""
+    y += 24
+    # 纹路2.png 作为 B30/N10 字符串的底板（保持比例，居中于标题）
     texture = _load_ui_texture("纹路2.png")
     if texture is not None:
-        scale = max(img.width / texture.width, section_h / texture.height)
-        new_w = max(1, round(texture.width * scale))
-        new_h = max(1, round(texture.height * scale))
-        texture = texture.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        tx = (new_w - img.width) // 2
-        ty = (new_h - section_h) // 2
-        texture = texture.crop((tx, ty, tx + img.width, ty + section_h))
-        img.paste(texture, (0, y), texture)
-    y += 24
+        tex_h = CARD2_SECTION_TEX_H
+        tex_w = max(1, round(texture.width * tex_h / texture.height))
+        texture = texture.resize((tex_w, tex_h), Image.Resampling.LANCZOS)
+        img.paste(
+            texture,
+            (int(img.width / 2 - tex_w / 2), y + 15 - tex_h // 2),
+            texture,
+        )
     draw.text(
         (img.width / 2, y),
         title,
@@ -1309,9 +1308,7 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
         fill=CARD2_TEXT,
         anchor="ma",
     )
-    y += 34
-    draw.line([(CARD2_PAD, y), (img.width - CARD2_PAD, y)], fill=CARD2_DIVIDER, width=2)
-    y += 14
+    y += 34 + 14
     card_w = CARD2_PLATE_W + CARD2_GAP
     for index, chart in enumerate(charts):
         col = index % CARD2_PER_ROW
