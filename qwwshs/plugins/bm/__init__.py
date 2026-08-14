@@ -49,7 +49,12 @@ from .charter import (
 from .constants import DATA_DIR, ConstantsError, get_song_constants
 from .decrypt import DecryptError, parse_account_data
 from .rating import ALL_DIFFS, compute_rating, normalize_n10_name, parse_scores
-from .render import render_card, render_chart_table, render_help_image
+from .render import (
+    render_card,
+    render_chart_table,
+    render_help_image,
+    render_list_image,
+)
 from .song import (
     add_alias,
     find_cover,
@@ -101,7 +106,7 @@ _ALIAS_MAX_LEN = 30
 _CHARTER_LIST_LIMIT = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.3.1"
+BM_VERSION = "0.3.2"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -410,7 +415,7 @@ bm_charter_related = on_command("bmrelatedcharter", priority=5, block=True)
 bm_charter_remove = on_command("bmremoverelatedcharter", priority=5, block=True)
 bm_charter_list = on_command("bmrelatedcharterlist", priority=5, block=True)
 bm_charter_unset = on_command("bmremovetheprimitivecharter", priority=5, block=True)
-bm_chart = on_command("bmchart", priority=5, block=True)
+bm_chart = on_command("bmchartlist", priority=5, block=True)
 bm_random = on_command("bmrandom", priority=5, block=True)
 bm_file_watch = on_message(priority=10, block=False)
 bm_song_pick = on_message(priority=10, block=False)
@@ -444,7 +449,7 @@ _HELP_TEXT = (
     "/bmrelatedcharter <基元谱师> — 添加关联谱师名义（白名单）\n"
     "/bmremoverelatedcharter <基元谱师> — 解除关联谱师名义（白名单）\n"
     "/bmrelatedcharterlist — 查看全部谱师关联（白名单）\n"
-    "/bmchart <定数1> [定数2] [难度...] — 按定数区间生成定数表图\n"
+    "/bmchartlist <定数1> [定数2] [难度...] — 按定数区间生成定数表图\n"
     "   13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
     "/bmrandom <定数1> [定数2] [难度...] — 在定数区间内随机挑一首曲目\n"
     "/bmbotversion — 查看 bot 版本\n"
@@ -631,7 +636,8 @@ async def handle_song(event: MessageEvent, arg: Message = CommandArg()) -> None:
     lines = [f"🔍 找到 {len(names)} 首相关曲目，回复序号查看详情："]
     lines.extend(f"{i + 1}. {_display_name(name)}" for i, name in enumerate(names))
     lines.append(f"（{_SONG_PICK_TTL:.0f} 秒内有效）")
-    await bm_song.finish("\n".join(lines))
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await bm_song.finish(MessageSegment.image(img_bytes))
 
 
 def _display_name(name: str) -> str:
@@ -891,7 +897,8 @@ async def handle_name_list(event: MessageEvent) -> None:
     for name in sorted(by_song):
         display = _display_name(name)
         lines.append(f"{display} <- {'，'.join(sorted(by_song[name]))}")
-    await bm_name_list.finish("\n".join(lines))
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await bm_name_list.finish(MessageSegment.image(img_bytes))
 
 
 # 谱师查询与管理（bmcharter / 基元谱师名义）
@@ -941,7 +948,8 @@ async def _send_charter_page(matcher: Matcher, state: dict) -> None:
             f"—— 第 {page + 1}/{pages} 页（共 {total} 首）· "
             "发送「下一页/上一页」翻页 · 回复序号查看歌曲 ——"
         )
-    await matcher.finish("\n".join(lines))
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await matcher.finish(MessageSegment.image(img_bytes))
 
 
 async def _show_charter_charts(matcher: Matcher, qq: str, charter_name: str) -> None:
@@ -982,7 +990,8 @@ async def handle_charter(event: MessageEvent, arg: Message = CommandArg()) -> No
     lines = [f"🔍 找到 {len(names)} 位谱师，回复序号查看其谱面："]
     lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
     lines.append(f"（{_SONG_PICK_TTL:.0f} 秒内有效）")
-    await bm_charter.finish("\n".join(lines))
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await bm_charter.finish(MessageSegment.image(img_bytes))
 
 
 @bm_charter_setup.handle()
@@ -1012,7 +1021,8 @@ async def handle_charter_setup(
     }
     lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择："]
     lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
-    await bm_charter_setup.finish("\n".join(lines))
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await bm_charter_setup.finish(MessageSegment.image(img_bytes))
 
 
 async def _ask_related_name(matcher: Matcher, qq: str, primitive: str) -> None:
@@ -1076,7 +1086,8 @@ async def handle_charter_related(
         }
         lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择基元谱师名义："]
         lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
-        await bm_charter_related.finish("\n".join(lines))
+        img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+        await bm_charter_related.finish(MessageSegment.image(img_bytes))
         return
     await _ask_related_name(bm_charter_related, qq, names[0])
 
@@ -1105,7 +1116,8 @@ async def handle_charter_remove(
         }
         lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择基元谱师名义："]
         lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
-        await bm_charter_remove.finish("\n".join(lines))
+        img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+        await bm_charter_remove.finish(MessageSegment.image(img_bytes))
         return
     await _ask_remove_name(bm_charter_remove, qq, names[0])
 
@@ -1149,7 +1161,8 @@ async def handle_charter_unset(
     }
     lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择："]
     lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
-    await bm_charter_unset.finish("\n".join(lines))
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await bm_charter_unset.finish(MessageSegment.image(img_bytes))
 
 
 @bm_charter_list.handle()
@@ -1164,7 +1177,8 @@ async def handle_charter_list(event: MessageEvent) -> None:
     for primitive in sorted(primitives):
         related = get_related(primitive)
         lines.append(f"{primitive}：{' / '.join(related) if related else '（无关联）'}")
-    await bm_charter_list.finish("\n".join(lines))
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await bm_charter_list.finish(MessageSegment.image(img_bytes))
 
 
 async def _apply_related_change(primitive: str, related: str, op: str) -> None:
@@ -1210,7 +1224,8 @@ async def _handle_charter_name_input(qq: str, state: dict, text: str) -> None:
     }
     lines = [f"🔍 找到 {len(names)} 位谱师，回复序号选择："]
     lines.extend(f"{i + 1}. {name}" for i, name in enumerate(names))
-    await bm_charter_pick.send("\n".join(lines))
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await bm_charter_pick.send(MessageSegment.image(img_bytes))
 
 
 async def _handle_charter_page_flip(qq: str, state: dict, nav: str) -> None:
@@ -1293,7 +1308,7 @@ async def handle_charter_pick(event: MessageEvent) -> None:
 
 
 # ================================================================
-# 定数区间查询（bmchart / bmrandom）
+# 定数区间查询（bmchartlist / bmrandom）
 # ================================================================
 
 # 难度 token -> 难度（大小写不敏感）
@@ -1380,14 +1395,14 @@ def _collect_charts(
 
 @bm_chart.handle()
 async def handle_chart(arg: Message = CommandArg()) -> None:
-    """按定数区间/难度生成定数表图。"""
+    """按定数区间/难度生成定数表图（/bmchartlist）。"""
     args = arg.extract_plain_text().split()
     if not args:
         await bm_chart.finish(
-            "用法：/bmchart <定数1> [定数2] [难度...]\n"
-            "例如：/bmchart 11 12 TT\n/bmchart 13+ RU\n"
+            "用法：/bmchartlist <定数1> [定数2] [难度...]\n"
+            "例如：/bmchartlist 11 12 TT\n/bmchartlist 13+ RU\n"
             "定数：13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
-            "/bmchart TT（全部定数）\n不写难度表示全部难度"
+            "/bmchartlist TT（全部定数）\n不写难度表示全部难度"
         )
     if not SONG_CONSTANTS:
         await bm_chart.finish("❌ 定数表未加载")
@@ -1408,7 +1423,7 @@ async def handle_random(arg: Message = CommandArg()) -> None:
     args = arg.extract_plain_text().split()
     if not args:
         await bm_random.finish(
-            "用法：/bmrandom <定数1> [定数2] [难度...]（参数同 /bmchart）"
+            "用法：/bmrandom <定数1> [定数2] [难度...]（参数同 /bmchartlist）"
         )
     if not SONG_CONSTANTS:
         await bm_random.finish("❌ 定数表未加载")

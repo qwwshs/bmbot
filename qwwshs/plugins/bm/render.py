@@ -778,3 +778,49 @@ def render_help_image(text: str) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
+
+
+# ================================================================
+# 列表图（bmsong 搜索结果 / bmcharter 候选 / 别名 / 谱师关联）
+# ================================================================
+
+_LIST_BG = (18, 18, 18)
+_LIST_PAD = 32
+_LIST_LINE_H = 38
+_LIST_HEADER = (255, 255, 255)
+_LIST_TEXT = (245, 245, 245)
+_LIST_MUTED = (150, 150, 150)
+
+
+def render_list_image(text: str) -> bytes:
+    """把列表文本渲染为深色背景图片，返回 PNG 字节。
+
+    样式：🎵/🔍/📋/📝 开头的标题行白色粗体；「—/…/（」开头的提示行灰色；
+    其余行（序号列表项等）白色；宽度按最长行自适应。
+    """
+    entries: list[tuple[str, ImageFont.FreeTypeFont, tuple[int, int, int]]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("🎵", "🔍", "📋", "📝")):
+            entries.append((line, _font(24, bold=True), _LIST_HEADER))
+        elif stripped.startswith(("—", "…", "（")):
+            entries.append((line, _font(20), _LIST_MUTED))
+        else:
+            entries.append((line, _font(22), _LIST_TEXT))
+    if not entries:
+        return b""
+    max_w = max(font.getlength(line) for line, font, _ in entries)
+    width = int(max_w) + 2 * _LIST_PAD
+    height = _LIST_PAD * 2 + len(entries) * _LIST_LINE_H
+    img = Image.new("RGB", (width, height), _LIST_BG)
+    draw = ImageDraw.Draw(img)
+    y = _LIST_PAD
+    for line, font, color in entries:
+        draw.text((_LIST_PAD, y), line, font=font, fill=color)
+        y += _LIST_LINE_H
+
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
