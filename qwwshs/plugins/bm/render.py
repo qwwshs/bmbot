@@ -1315,6 +1315,18 @@ def render_card_new(
     img = Image.new("RGB", (width, height), CARD2_BG)
     draw = ImageDraw.Draw(img)
 
+    # 整张背景：随机 ui/bg 图片铺满（保持比例居中裁剪），所有内容画在其上
+    bg = _random_bg()
+    if bg is not None:
+        scale = max(width / bg.width, height / bg.height)
+        new_w = max(1, round(bg.width * scale))
+        new_h = max(1, round(bg.height * scale))
+        bg = bg.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        left = (new_w - width) // 2
+        top_off = (new_h - height) // 2
+        bg = bg.crop((left, top_off, left + width, top_off + height))
+        img.paste(bg, (0, 0), bg)
+
     # ---------- 头部 ----------
     avatar = _load_avatar(character)
     avatar_x = CARD2_AVATAR_X
@@ -1374,20 +1386,6 @@ def render_card_new(
     )
     # 等级分布：右上角（保持大小）
     _draw_grade_matrix(draw, CARD2_AVATAR_TOP, grade_counts, right=width - CARD2_PAD)
-
-    # 底部背景：随机 ui/bg 图片铺满（保持比例居中裁剪），网格画在其上
-    bg = _random_bg()
-    if bg is not None:
-        bg_top = header_h
-        area_h = height - bg_top
-        scale = max(width / bg.width, area_h / bg.height)
-        new_w = max(1, round(bg.width * scale))
-        new_h = max(1, round(bg.height * scale))
-        bg = bg.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        left = (new_w - width) // 2
-        top_off = (new_h - area_h) // 2
-        bg = bg.crop((left, top_off, left + width, top_off + area_h))
-        img.paste(bg, (0, bg_top), bg)
 
     y = header_h + 24
 
