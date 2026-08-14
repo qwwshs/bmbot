@@ -51,6 +51,7 @@ from .decrypt import DecryptError, parse_account_data
 from .rating import ALL_DIFFS, compute_rating, normalize_n10_name, parse_scores
 from .render import (
     render_card,
+    render_card_new,
     render_chart_table,
     render_help_image,
     render_list_image,
@@ -97,6 +98,7 @@ _BINDINGS_BAK = _DATA_DIR / "bindings.json.bak"
 _ALIASES_PATH = _DATA_DIR / "aliases.json"
 _WHITELIST_PATH = _DATA_DIR / "whitelist.json"
 _CHARTERS_PATH = _DATA_DIR / "charters.json"
+_RATING_STYLES_PATH = _DATA_DIR / "ratingstyles.json"
 # 旧位置（插件包内 data/），用于自动迁移
 _OLD_BINDINGS_PATH = Path(__file__).resolve().parent / "data" / "bindings.json"
 _FILE_WAIT_TTL = 300.0
@@ -104,7 +106,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.3.3"
+BM_VERSION = "0.3.4"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -145,6 +147,44 @@ def _save_whitelist() -> None:
 
 
 _whitelist = _load_whitelist()
+
+
+# QQ -> 查分样式（"new" 新版默认 / "old" 旧版）
+_rating_styles: dict[str, str] = {}
+
+
+def _load_rating_styles() -> None:
+    """加载各用户的查分样式选择。"""
+    try:
+        data = json.loads(_RATING_STYLES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(data, dict):
+        _rating_styles.update(
+            {str(k): v for k, v in data.items() if v in ("new", "old")}
+        )
+
+
+def _save_rating_styles() -> None:
+    """持久化查分样式选择。"""
+    _RATING_STYLES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _RATING_STYLES_PATH.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps(_rating_styles, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    tmp.replace(_RATING_STYLES_PATH)
+
+
+def _toggle_rating_style(qq: str) -> str:
+    """切换用户的查分样式，返回新样式名。"""
+    current = _rating_styles.get(qq, "new")
+    new = "old" if current == "new" else "new"
+    _rating_styles[qq] = new
+    _save_rating_styles()
+    return new
+
+
+_load_rating_styles()
 
 
 def _whitelist_text() -> str:
@@ -415,6 +455,7 @@ bm_charter_list = on_command("bmrelatedcharterlist", priority=5, block=True)
 bm_charter_unset = on_command("bmremovetheprimitivecharter", priority=5, block=True)
 bm_chart = on_command("bmchartlist", priority=5, block=True)
 bm_random = on_command("bmrandom", priority=5, block=True)
+bm_rating_style = on_command("bmratingstyle", priority=5, block=True)
 bm_file_watch = on_message(priority=10, block=False)
 bm_song_pick = on_message(priority=10, block=False)
 bm_addname_pick = on_message(priority=10, block=False)
@@ -435,6 +476,7 @@ _HELP_TEXT = (
     "   · 内容为从 <RSAKeyValue> 开始的完整存档（FormalSave.txt）\n"
     "   · 或已解密的 JSON 文本\n"
     "/bmrating — 以图片输出你的 Rating 查分\n"
+    "/bmratingstyle — 切换查分样式（新版/旧版）\n"
     "/bmsong <曲名> — 单曲查询（支持模糊搜索）\n"
     "/bmaddname <别名> — 为歌曲添加自定义别名（白名单）\n"
     "/bmremovename <别名> — 删除歌曲别名（白名单）\n"
@@ -585,9 +627,15 @@ async def handle_rating(event: MessageEvent) -> None:
     result = compute_rating(charts, data.get("Potential"))
     result.missing = missing
     player_name = binding.get("name") or str(data.get("AccountName") or "未知玩家")
-    img_bytes = await asyncio.to_thread(
-        render_card, player_name, result, grade_counts, data.get("Potential")
-    )
+    style = _rating_styles.get(qq, "new")
+    if style == "old":
+        img_bytes = await asyncio.to_thread(
+            render_card, player_name, result, grade_counts, data.get("Potential")
+        )
+    else:
+        img_bytes = await asyncio.to_thread(
+            render_card_new, player_name, result, grade_counts, data.get("Potential")
+        )
     message: Message = MessageSegment.image(img_bytes)
     if missing:
         message += f"\n⚠️ 有 {len(missing)} 首成绩未在定数表中，不计入"
@@ -1407,3 +1455,14 @@ async def handle_random(arg: Message = CommandArg()) -> None:
         await bm_random.finish("❌ 该范围内没有符合条件的曲目")
     constant, song, diff = random.choice(charts)
     await bm_random.finish(f"🎲 {_display_name(song)}（{diff} {constant:.1f}）")
+
+
+@bm_rating_style.handle()
+async def handle_rating_style(event: MessageEvent) -> None:
+    """切换查分样式（新版/旧版），按用户独立保存。"""
+    qq = str(event.user_id)
+    style = _toggle_rating_style(qq)
+    name = "新版" if style == "new" else "旧版"
+    await bm_rating_style.finish(
+        f"✅ 已切换为{name}查分样式（下次发送 /bmrating 生效）"
+    )

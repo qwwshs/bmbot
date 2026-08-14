@@ -824,3 +824,245 @@ def render_list_image(text: str) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
+
+
+# ================================================================
+# 新版查分卡（/bmrating 默认样式）
+# ================================================================
+
+CARD2_COVER = 140  # 曲绘 1:1 边长
+CARD2_PLATE_W = 187  # 底板 4:3 宽（高度与曲绘相同）
+CARD2_GAP = 12  # 卡片间距
+CARD2_PER_ROW = 5  # 每行卡片数
+CARD2_PAD = 30
+CARD2_BG = (20, 20, 20)
+CARD2_TEXT = (240, 240, 240)
+CARD2_MUTED = (150, 150, 150)
+CARD2_DIVIDER = (70, 70, 70)
+CARD2_ACCENT = (220, 220, 220)
+
+# 难度全名（与 bmchartlist 相同的难度色见 CHART_DIFF_COLORS）
+DIFF_FULL_NAMES = {
+    "RL": "REALITY",
+    "IL": "ILLUSION",
+    "TT": "TWIST",
+    "RU": "RUIN",
+    "DM": "DREAMY",
+    "FL": "FOOL",
+}
+
+
+def _draw_matrix_compact(
+    draw: ImageDraw.ImageDraw, x: int, y: int, grade_counts: dict
+) -> int:
+    """紧凑版难度 x 等级分布表（新版头部右侧）。"""
+    col_w = 64
+    diff_x = x + col_w
+    draw.text(
+        (x + col_w // 2, y),
+        "等级",
+        font=_font(18),
+        fill=CARD2_MUTED,
+        anchor="ma",
+    )
+    for index, diff in enumerate(ALL_DIFFS):
+        draw.text(
+            (diff_x + index * col_w + col_w // 2, y),
+            diff,
+            font=_font(18, bold=True),
+            fill=CARD2_TEXT,
+            anchor="ma",
+        )
+    y += 24
+    for grade in GRADES:
+        draw.text(
+            (x + col_w // 2, y + 9),
+            grade,
+            font=_font(18, bold=True),
+            fill=GRADE_COLORS[grade],
+            anchor="ma",
+        )
+        for index, diff in enumerate(ALL_DIFFS):
+            draw.text(
+                (diff_x + index * col_w + col_w // 2, y + 9),
+                str(grade_counts[diff][grade]),
+                font=_font(18),
+                fill=CARD2_TEXT,
+                anchor="ma",
+            )
+        y += 21
+    return y
+
+
+def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
+    img: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    rank_label: str,
+    chart: Chart,
+) -> None:
+    """新版单曲卡：1:1 曲绘 + 右侧 4:3 难度色底板。"""
+    cover = load_cover(chart.name, chart.diff)
+    if cover is not None:
+        cover = cover.resize((CARD2_COVER, CARD2_COVER), Image.Resampling.LANCZOS)
+        img.paste(cover, (x, y))
+    else:
+        draw.rectangle(
+            [x, y, x + CARD2_COVER - 1, y + CARD2_COVER - 1], fill=(40, 40, 40)
+        )
+        draw.text(
+            (x + CARD2_COVER // 2, y + CARD2_COVER // 2),
+            "♪",
+            font=_font(40),
+            fill=(120, 120, 120),
+            anchor="mm",
+        )
+    # 底板（难度色，与 bmchartlist 相同）
+    px = x + CARD2_COVER
+    color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
+    draw.rectangle([px, y, px + CARD2_PLATE_W - 1, y + CARD2_COVER - 1], fill=color)
+    cx = px + CARD2_PLATE_W // 2
+    text_w = CARD2_PLATE_W - 12
+    # 曲名：固定两行高度（字号自适应），保证任何情况下高度一致
+    lines, size = _fit_chart_title(draw, chart.original_name or chart.name, text_w)
+    line_h = size + 1
+    ty = y + 7
+    for line in lines:
+        draw.text((cx, ty), line, font=_font(size), fill=(255, 255, 255), anchor="ma")
+        ty += line_h
+    ty += 6
+    # 难度全名 + 定数
+    draw.text(
+        (cx, ty),
+        f"{DIFF_FULL_NAMES.get(chart.diff, chart.diff)} {chart.constant:.1f}",
+        font=_font(11),
+        fill=(255, 255, 255),
+        anchor="ma",
+    )
+    ty += 15
+    # 等级（在前，按等级色）+ 分数
+    grade = get_grade(chart.score)
+    grade_font = _font(11, bold=True)
+    score_font = _font(11)
+    grade_w = grade_font.getlength(grade)
+    score_w = score_font.getlength(str(chart.score))
+    gap = 6
+    total_w = grade_w + gap + score_w
+    draw.text(
+        (cx - total_w / 2 + grade_w / 2, ty),
+        grade,
+        font=grade_font,
+        fill=GRADE_COLORS[grade],
+        anchor="ma",
+    )
+    draw.text(
+        (cx + total_w / 2 - score_w / 2, ty),
+        f"{chart.score}",
+        font=score_font,
+        fill=(255, 255, 255),
+        anchor="ma",
+    )
+    ty += 15
+    # Potential
+    draw.text(
+        (cx, ty),
+        f"Potential:{chart.potential:.3f}",
+        font=_font(11),
+        fill=(255, 255, 255),
+        anchor="ma",
+    )
+    ty += 17
+    # 序号（最后一行）
+    draw.text(
+        (cx, ty),
+        rank_label,
+        font=_font(13, bold=True),
+        fill=(255, 255, 255),
+        anchor="ma",
+    )
+
+
+def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
+    img: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    y: int,
+    title: str,
+    charts: list,
+    prefix: str,
+    rows: int,
+) -> int:
+    """新版分区：标题 + 分割线 + 网格（每行 5 首）。"""
+    y += 24
+    draw.text((CARD2_PAD, y), title, font=_font(30, bold=True), fill=CARD2_TEXT)
+    y += 34
+    draw.line([(CARD2_PAD, y), (img.width - CARD2_PAD, y)], fill=CARD2_DIVIDER, width=2)
+    y += 14
+    card_w = CARD2_COVER + CARD2_PLATE_W
+    for index, chart in enumerate(charts):
+        col = index % CARD2_PER_ROW
+        row = index // CARD2_PER_ROW
+        cx = CARD2_PAD + col * (card_w + CARD2_GAP)
+        cy = y + row * (CARD2_COVER + CARD2_GAP)
+        _draw_rating_card_new(img, draw, cx, cy, f"{prefix}{index + 1}", chart)
+    return y + rows * (CARD2_COVER + CARD2_GAP)
+
+
+def render_card_new(
+    player_name: str,
+    result: RatingResult,
+    grade_counts: dict[str, dict[str, int]],
+    _archive_potential: object = None,
+) -> bytes:
+    """渲染新版查分卡，返回 PNG 字节。
+
+    左上角标题/用户名/RATING + 右侧等级分布，B30/N10 网格（每行 5 首）。
+    """
+    card_w = CARD2_COVER + CARD2_PLATE_W
+    width = CARD2_PER_ROW * card_w + (CARD2_PER_ROW - 1) * CARD2_GAP + 2 * CARD2_PAD
+    header_h = max(32 + 42 + 36, 24 + len(GRADES) * 21) + 24
+    b30_rows = (len(result.b30_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
+    n10_rows = (len(result.n10_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
+    grid_h = CARD2_COVER + CARD2_GAP
+    section_h = 24 + 34 + 14
+    height = (
+        CARD2_PAD
+        + header_h
+        + section_h
+        + b30_rows * grid_h
+        + section_h
+        + n10_rows * grid_h
+        + CARD2_PAD
+    )
+
+    img = Image.new("RGB", (width, height), CARD2_BG)
+    draw = ImageDraw.Draw(img)
+    y = CARD2_PAD
+
+    # 头部：左侧标题/用户名/RATING，右侧等级分布
+    matrix_w = 7 * 64
+    matrix_x = width - CARD2_PAD - matrix_w
+    _draw_matrix_compact(draw, matrix_x, y, grade_counts)
+    draw.text(
+        (CARD2_PAD, y), "berry melody", font=_font(22, bold=True), fill=CARD2_ACCENT
+    )
+    y += 32
+    name = _ellipsize(
+        draw, player_name, _font(34, bold=True), matrix_x - CARD2_PAD - 40
+    )
+    draw.text((CARD2_PAD, y), name, font=_font(34, bold=True), fill=CARD2_TEXT)
+    y += 42
+    draw.text(
+        (CARD2_PAD, y),
+        f"RATING:{result.rating:.2f}",
+        font=_font(26, bold=True),
+        fill=(255, 255, 255),
+    )
+    y = CARD2_PAD + header_h
+
+    y = _draw_rating_section_new(img, draw, y, "B30", result.b30_charts, "B", b30_rows)
+    y = _draw_rating_section_new(img, draw, y, "N10", result.n10_charts, "N", n10_rows)
+
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
