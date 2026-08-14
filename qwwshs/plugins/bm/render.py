@@ -515,3 +515,194 @@ def render_card(
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
+
+
+# ================================================================
+# 定数表图（bmchart）：按定数分列，列内歌曲每行 5 首
+# ================================================================
+
+# 难度代表色（用户指定，ARGB 去掉 alpha 前缀）
+CHART_DIFF_COLORS = {
+    "RU": (179, 87, 255),
+    "RL": (0, 202, 255),
+    "TT": (255, 81, 79),
+    "IL": (255, 196, 0),
+    "DM": (0, 233, 168),
+    "FL": (0, 233, 168),
+}
+
+_CHART_CARD = 140  # 曲绘边长（1:1）
+_CHART_LABEL_H = 35  # 底部难度色矩形高（曲绘的 1/4）
+_CHART_PER_ROW = 5  # 每行歌曲数
+_CHART_COLS_PER_ROW = 2  # 每行定数列块数
+_CHART_GAP = 10
+_CHART_PAD = 14
+_CHART_COL_GAP = 24
+_CHART_TITLE_H = 30
+_CHART_TITLE_LINES = 2  # 曲名最多行数（固定占位高度）
+_CHART_TITLE_MAX = 11  # 曲名字号上限
+_CHART_TITLE_MIN = 6  # 曲名字号下限（放不下时截断）
+_CHART_BG = (247, 247, 247)
+_CHART_TEXT = (35, 35, 35)
+
+
+def _wrap_lines(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    max_w: int,
+    max_lines: int,
+) -> list[str] | None:
+    """字符级换行；超出 max_lines 行返回 None。"""
+    lines: list[str] = []
+    current = ""
+    for ch in text:
+        if not current:
+            current = ch
+            continue
+        if draw.textlength(current + ch, font=font) <= max_w:
+            current += ch
+        else:
+            lines.append(current)
+            current = ch
+            if len(lines) >= max_lines:
+                return None
+    if current:
+        lines.append(current)
+    if len(lines) > max_lines:
+        return None
+    return lines
+
+
+def _fit_chart_title(
+    draw: ImageDraw.ImageDraw, text: str, max_w: int
+) -> tuple[list[str], int]:
+    """曲名换行适配：字号递减到可在固定行数内放下，放不下截断。"""
+    for size in range(_CHART_TITLE_MAX, _CHART_TITLE_MIN - 1, -1):
+        font = _font(size)
+        lines = _wrap_lines(draw, text, font, max_w, _CHART_TITLE_LINES)
+        if lines is not None:
+            return lines, size
+    font = _font(_CHART_TITLE_MIN)
+    truncated = text
+    while True:
+        lines = _wrap_lines(draw, truncated + "…", font, max_w, _CHART_TITLE_LINES)
+        if lines is not None:
+            return lines, _CHART_TITLE_MIN
+        if not truncated:
+            return [""], _CHART_TITLE_MIN
+        truncated = truncated[:-1]
+
+
+def _draw_chart_card(  # noqa: PLR0913, PLR0917
+    img: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    song: str,
+    diff: str,
+) -> None:
+    """绘制单张定数表卡：1:1 曲绘 + 底部难度色矩形（曲名/难度）。"""
+    cover = load_cover(song, diff)
+    if cover is not None:
+        cover = cover.resize((_CHART_CARD, _CHART_CARD), Image.Resampling.LANCZOS)
+        img.paste(cover, (x, y))
+    else:
+        draw.rectangle(
+            [x, y, x + _CHART_CARD - 1, y + _CHART_CARD - 1], fill=(225, 225, 225)
+        )
+        draw.text(
+            (x + _CHART_CARD // 2, y + _CHART_CARD // 2),
+            "♪",
+            font=_font(40),
+            fill=(150, 150, 150),
+            anchor="mm",
+        )
+    color = CHART_DIFF_COLORS.get(diff, (140, 140, 140))
+    label_y = y + _CHART_CARD
+    draw.rectangle(
+        [x, label_y, x + _CHART_CARD - 1, label_y + _CHART_LABEL_H - 1], fill=color
+    )
+    # 曲名区固定两行高度（字号自适应），难度固定底部一行
+    max_w = _CHART_CARD - 6
+    lines, size = _fit_chart_title(draw, song, max_w)
+    line_h = size + 1
+    for index, line in enumerate(lines):
+        draw.text(
+            (x + _CHART_CARD // 2, label_y + 1 + index * line_h),
+            line,
+            font=_font(size),
+            fill=(255, 255, 255),
+            anchor="ma",
+        )
+    draw.text(
+        (x + _CHART_CARD // 2, label_y + _CHART_LABEL_H - 3),
+        diff,
+        font=_font(9),
+        fill=(255, 255, 255),
+        anchor="ms",
+    )
+
+
+def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
+    """绘制定数表图：按定数降序分列，列内歌曲每行 5 首，返回 PNG 字节。
+
+    ``charts`` 为 ``(定数, 曲名, 难度)`` 列表。
+    """
+    groups: dict[float, list[tuple[str, str]]] = {}
+    for constant, song, diff in charts:
+        groups.setdefault(constant, []).append((song, diff))
+    ordered = sorted(groups.items(), key=lambda item: -item[0])
+
+    col_w = (
+        _CHART_PER_ROW * _CHART_CARD
+        + (_CHART_PER_ROW - 1) * _CHART_GAP
+        + 2 * _CHART_PAD
+    )
+    width = _CHART_COLS_PER_ROW * col_w + (_CHART_COLS_PER_ROW - 1) * _CHART_COL_GAP
+    blocks = [
+        ordered[index : index + _CHART_COLS_PER_ROW]
+        for index in range(0, len(ordered), _CHART_COLS_PER_ROW)
+    ]
+    block_heights: list[int] = []
+    for block in blocks:
+        rows = max(
+            (len(items) + _CHART_PER_ROW - 1) // _CHART_PER_ROW
+            for _constant, items in block
+        )
+        block_heights.append(
+            _CHART_TITLE_H + rows * (_CHART_CARD + _CHART_LABEL_H + _CHART_GAP)
+        )
+    height = _CHART_PAD + sum(block_heights) + _CHART_PAD * len(blocks) + _CHART_PAD
+
+    img = Image.new("RGB", (width, height), _CHART_BG)
+    draw = ImageDraw.Draw(img)
+    y = _CHART_PAD
+    for block, block_h in zip(blocks, block_heights):
+        x = _CHART_PAD
+        for constant, items in block:
+            draw.text(
+                (x + col_w // 2, y + 4),
+                f"{constant:.1f}",
+                font=_font(20, bold=True),
+                fill=_CHART_TEXT,
+                anchor="ma",
+            )
+            draw.line(
+                [(x, y + _CHART_TITLE_H), (x + col_w, y + _CHART_TITLE_H)],
+                fill=(190, 190, 190),
+                width=1,
+            )
+            for index, (song, diff) in enumerate(items):
+                col = index % _CHART_PER_ROW
+                row = index // _CHART_PER_ROW
+                cx = x + _CHART_PAD + col * (_CHART_CARD + _CHART_GAP)
+                card_h = _CHART_CARD + _CHART_LABEL_H + _CHART_GAP
+                cy = y + _CHART_TITLE_H + row * card_h
+                _draw_chart_card(img, draw, cx, cy, song, diff)
+            x += col_w + _CHART_COL_GAP
+        y += _CHART_PAD + block_h
+
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()

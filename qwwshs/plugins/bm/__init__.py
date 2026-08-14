@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import random
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -48,7 +49,7 @@ from .charter import (
 from .constants import DATA_DIR, ConstantsError, get_song_constants
 from .decrypt import DecryptError, parse_account_data
 from .rating import ALL_DIFFS, compute_rating, normalize_n10_name, parse_scores
-from .render import render_card
+from .render import render_card, render_chart_table
 from .song import (
     add_alias,
     find_cover,
@@ -100,7 +101,7 @@ _ALIAS_MAX_LEN = 30
 _CHARTER_LIST_LIMIT = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.2.2"
+BM_VERSION = "0.3.0"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -409,6 +410,8 @@ bm_charter_related = on_command("bmrelatedcharter", priority=5, block=True)
 bm_charter_remove = on_command("bmremoverelatedcharter", priority=5, block=True)
 bm_charter_list = on_command("bmrelatedcharterlist", priority=5, block=True)
 bm_charter_unset = on_command("bmremovetheprimitivecharter", priority=5, block=True)
+bm_chart = on_command("bmchart", priority=5, block=True)
+bm_random = on_command("bmrandom", priority=5, block=True)
 bm_file_watch = on_message(priority=10, block=False)
 bm_song_pick = on_message(priority=10, block=False)
 bm_addname_pick = on_message(priority=10, block=False)
@@ -867,16 +870,19 @@ async def _finish_remove(matcher: Matcher, alias: str, name: str) -> None:
 
 @bm_name_list.handle()
 async def handle_name_list(event: MessageEvent) -> None:
-    """输出全部别名与曲目的对应关系。"""
+    """输出全部别名与曲目的对应关系（同一首歌的别名放一行）。"""
     if not _can_manage_alias(event.user_id):
         await bm_name_list.finish("❌ 你没有权限使用此命令")
     aliases = get_aliases()
     if not aliases:
         await bm_name_list.finish("📭 当前没有别名")
+    by_song: dict[str, list[str]] = {}
+    for alias, name in aliases.items():
+        by_song.setdefault(name, []).append(alias)
     lines = [f"📋 别名列表（共 {len(aliases)} 条）："]
-    lines.extend(
-        f"{alias} → {_display_name(name)}" for alias, name in sorted(aliases.items())
-    )
+    for name in sorted(by_song):
+        display = _display_name(name)
+        lines.append(f"{display} <- {'，'.join(sorted(by_song[name]))}")
     await bm_name_list.finish("\n".join(lines))
 
 
@@ -1276,3 +1282,113 @@ async def handle_charter_pick(event: MessageEvent) -> None:
         return
     if text.isdigit():
         await _handle_charter_number_pick(qq, state, int(text))
+
+
+# ================================================================
+# 定数区间查询（bmchart / bmrandom）
+# ================================================================
+
+# 难度 token -> 难度（大小写不敏感）
+_DIFF_TOKENS = {diff.lower(): diff for diff in ALL_DIFFS}
+_MAX_CONST_ARGS = 2
+
+
+def _parse_const_token(token: str) -> float:
+    """解析定数 token：``13+`` 表示 ``13.6``。"""
+    text = token.strip()
+    if text.endswith("+"):
+        return float(text[:-1]) + 0.6
+    return float(text)
+
+
+def _parse_chart_args(
+    args: list[str],
+) -> tuple[float | None, float | None, list[str]]:
+    """解析 bmchart/bmrandom 参数 → (定数下限, 定数上限, 难度列表)。"""
+    consts: list[float] = []
+    diffs: list[str] = []
+    for token in args:
+        lower = token.strip().lower()
+        if lower in _DIFF_TOKENS:
+            if _DIFF_TOKENS[lower] not in diffs:
+                diffs.append(_DIFF_TOKENS[lower])
+            continue
+        try:
+            consts.append(_parse_const_token(token))
+        except ValueError as exc:
+            raise ValueError(f"无法识别的参数「{token}」（应为定数或难度）") from exc
+    if len(consts) > _MAX_CONST_ARGS:
+        raise ValueError("定数参数最多两个（下限和上限）")
+    lower = consts[0] if consts else None
+    upper = consts[1] if len(consts) > 1 else None
+    if lower is not None and upper is not None and lower > upper:
+        lower, upper = upper, lower
+    return lower, upper, diffs
+
+
+def _collect_charts(
+    constants: dict[str, dict],
+    lower: float | None,
+    upper: float | None,
+    diffs: list[str],
+) -> list[tuple[float, str, str]]:
+    """收集 ``[lower, upper]`` 定数区间的指定难度曲目，按定数降序。"""
+    targets = diffs or list(ALL_DIFFS)
+    charts: list[tuple[float, str, str]] = []
+    for song, entry in constants.items():
+        for diff in targets:
+            constant = entry.get(diff)
+            if constant is None or float(constant) <= 0:
+                continue
+            value = float(constant)
+            if lower is not None and value < lower:
+                continue
+            if upper is not None and value > upper:
+                continue
+            charts.append((value, song, diff))
+    charts.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return charts
+
+
+@bm_chart.handle()
+async def handle_chart(arg: Message = CommandArg()) -> None:
+    """按定数区间/难度生成定数表图。"""
+    args = arg.extract_plain_text().split()
+    if not args:
+        await bm_chart.finish(
+            "用法：/bmchart <定数1> [定数2] [难度...]\n"
+            "例如：/bmchart 11 12 TT\n/bmchart 13+ RU（13+ 表示 13.6）\n"
+            "/bmchart TT（全部定数）\n不写难度表示全部难度"
+        )
+    if not SONG_CONSTANTS:
+        await bm_chart.finish("❌ 定数表未加载")
+    try:
+        lower, upper, diffs = _parse_chart_args(args)
+    except ValueError as exc:
+        await bm_chart.finish(f"❌ {exc}")
+    charts = _collect_charts(SONG_CONSTANTS, lower, upper, diffs)
+    if not charts:
+        await bm_chart.finish("❌ 该范围内没有符合条件的曲目")
+    img_bytes = await asyncio.to_thread(render_chart_table, charts)
+    await bm_chart.finish(MessageSegment.image(img_bytes))
+
+
+@bm_random.handle()
+async def handle_random(arg: Message = CommandArg()) -> None:
+    """按定数区间/难度随机挑一首曲目（文字返回）。"""
+    args = arg.extract_plain_text().split()
+    if not args:
+        await bm_random.finish(
+            "用法：/bmrandom <定数1> [定数2] [难度...]（参数同 /bmchart）"
+        )
+    if not SONG_CONSTANTS:
+        await bm_random.finish("❌ 定数表未加载")
+    try:
+        lower, upper, diffs = _parse_chart_args(args)
+    except ValueError as exc:
+        await bm_random.finish(f"❌ {exc}")
+    charts = _collect_charts(SONG_CONSTANTS, lower, upper, diffs)
+    if not charts:
+        await bm_random.finish("❌ 该范围内没有符合条件的曲目")
+    constant, song, diff = random.choice(charts)
+    await bm_random.finish(f"🎲 {_display_name(song)}（{diff} {constant:.1f}）")
