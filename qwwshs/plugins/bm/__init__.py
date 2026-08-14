@@ -106,7 +106,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.4.3"
+BM_VERSION = "0.4.4"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -472,7 +472,8 @@ _HELP_TEXT = (
     "━━━━━━━━━━━━━━━━━━\n"
     "/bmhelp — 查看本帮助\n"
     "/bmbind — 绑定存档\n"
-    "   发送后请在 5 分钟内发送存档 txt 文件（聊天文件或群文件均可）\n"
+    "   导出步骤：进入 Berry Melody，切换角色为克莱因，导出存档，\n"
+    "   随后将导出的存档放入 txt 文件再发送（聊天文件或群文件均可）\n"
     "   · 内容为从 <RSAKeyValue> 开始的完整存档（FormalSave.txt）\n"
     "   · 或已解密的 JSON 文本\n"
     "/bmrating — 以图片输出你的 Rating 查分\n"
@@ -509,8 +510,10 @@ async def handle_bind(event: MessageEvent) -> None:
     qq = str(event.user_id)
     _awaiting_file[qq] = time.monotonic()
     await bm_bind.finish(
-        "📄 请在 5 分钟内发送你的存档 txt 文件\n"
-        "（从 <RSAKeyValue> 开始的完整存档，或已解密的 JSON 文本）"
+        "📄 请导出存档并发送 txt 文件（5 分钟内有效）\n"
+        "   步骤：进入 Berry Melody → 切换角色为克莱因 → 导出存档\n"
+        "   → 将导出的存档放入 txt 文件中再发送（聊天文件或群文件均可）\n"
+        "（内容为从 <RSAKeyValue> 开始的完整存档，或已解密的 JSON 文本）"
     )
 
 
