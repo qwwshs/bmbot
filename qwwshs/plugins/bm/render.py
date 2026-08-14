@@ -835,19 +835,19 @@ def render_list_image(text: str) -> bytes:
 # 新版查分卡（/bmrating 默认样式）
 # ================================================================
 
-CARD2_PLATE_H = 220  # 底板高度
+CARD2_PLATE_H = 220  # 底板高度（保持 2:1 不放大）
 CARD2_PLATE_W = 2 * CARD2_PLATE_H  # 底板宽度（2:1）
 CARD2_COVER = int(CARD2_PLATE_H * 0.9)  # 曲绘 1:1 边长 = 底板高的 0.9
 CARD2_COVER_M = (CARD2_PLATE_H - CARD2_COVER) // 2  # 曲绘左/上/下与底板边缘等距
 CARD2_TEXT_GAP = 12  # 曲绘右缘与右侧文字区间距
 CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
 CARD2_RADIUS = 10  # 底板圆角半径
-CARD2_ALPHA = 0.8  # 底板不透明度 80%（与卡片背景合成）
-CARD2_BASE = 18  # 普通文字字号（曲名/GOAL/评级/定数，均加粗）
-CARD2_SCORE = 32  # 分数字号（加粗）
-CARD2_TITLE_MIN = 12  # 曲名字号下限（放不下时截断）
+CARD2_ALPHA = 0.4  # 底板不透明度（原 0.8 的 50%）
+CARD2_BASE = 26  # 普通文字字号（GOAL/评级/定数，加粗）
+CARD2_SCORE = 44  # 分数字号（加粗；48 时 7 位满分溢出文字区）
+CARD2_TITLE_MAX = 44  # 曲名最大字号（明显大于其他文字，两行固定高）
+CARD2_TITLE_MIN = 20  # 曲名字号下限（放不下时截断）
 CARD2_GOAL = (204, 204, 204)  # GOAL 行颜色：alpha 80%
-CARD2_STRIP = 9  # 曲绘下方条带序号字号（条带仅 0.1 底板高）
 CARD2_GAP = 12  # 卡片间距
 CARD2_PER_ROW = 5  # 每行卡片数
 CARD2_PAD = 30
@@ -910,15 +910,14 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     draw: ImageDraw.ImageDraw,
     x: int,
     y: int,
-    rank_label: str,
     chart: Chart,
     goal: int | None,
 ) -> None:
-    """新版单曲卡：2:1 半透明(80%)圆角底板，内嵌 0.9 高曲绘（左/上/下与底板等距）。
+    """新版单曲卡：2:1 半透明(40%)圆角底板，内嵌 0.9 高曲绘（四边等距）。
 
-    右侧文字区从上到下（均加粗）：曲名（固定两行高）/ 分割线 / 分数 /
-    ->GOAL（alpha 80%，无法推分显示 ->分数）/ 定数+评级同一行（靠左/靠右）；
-    曲绘下方条带：左序号。无难度文字。
+    右侧文字区从上到下（均加粗，尽量占满 0.9 高，无分割线）：
+    曲名（固定两行高、额外加大）/ 分数 / ->GOAL（alpha 80%，无法推分显示 ->分数）/
+    定数+评级同一行（靠左/靠右）。无序号。
     """
     color = _blend_alpha(
         CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140)), CARD2_ALPHA
@@ -953,20 +952,19 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     right = x + CARD2_PLATE_W - CARD2_TEXT_PAD
     block_h = int(CARD2_PLATE_H * 0.9)
     top = y + (CARD2_PLATE_H - block_h) // 2
-    title_h = 2 * (CARD2_BASE + 2)
-    divider_h = 2
-    score_h = CARD2_SCORE + 10
-    goal_h = CARD2_BASE + 6
-    const_grade_h = CARD2_BASE + 6
-    content_h = title_h + divider_h + score_h + goal_h + const_grade_h
-    gap, extra = divmod(block_h - content_h, 4)
+    title_h = 2 * (CARD2_TITLE_MAX + 2)
+    score_h = CARD2_SCORE + 2
+    goal_h = CARD2_BASE + 2
+    const_grade_h = CARD2_BASE + 2
+    content_h = title_h + score_h + goal_h + const_grade_h
+    gap, extra = divmod(block_h - content_h, 3)
 
-    # 曲名：固定两行高度（字号自适应，加粗），任何情况下高度一致
+    # 曲名：固定两行高度（字号自适应，加粗、额外加大），任何情况下高度一致
     lines, size = _fit_chart_title(
         draw,
         chart.original_name or chart.name,
         right - lx,
-        max_size=CARD2_BASE,
+        max_size=CARD2_TITLE_MAX,
         min_size=CARD2_TITLE_MIN,
     )
     ty = top
@@ -974,11 +972,8 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     for line in lines:
         draw.text((lx, ty), line, font=_font(size, bold=True), fill=(255, 255, 255))
         ty += line_h
-    # 分割线（曲名与分数之间）
-    ty = top + title_h + gap + extra
-    draw.line([(lx, ty), (right, ty)], fill=(255, 255, 255), width=divider_h)
     # 分数：加粗
-    ty += divider_h + gap
+    ty = top + title_h + gap + extra
     draw.text(
         (lx, ty),
         f"{chart.score}",
@@ -1008,15 +1003,6 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
         fill=GRADE_COLORS[grade],
         anchor="ra",
     )
-    # 曲绘下方条带（窄，小字号）：左序号
-    strip_cy = (cy + CARD2_COVER + y + CARD2_PLATE_H) // 2
-    draw.text(
-        (cx, strip_cy),
-        rank_label,
-        font=_font(CARD2_STRIP, bold=True),
-        fill=(255, 255, 255),
-        anchor="lm",
-    )
 
 
 def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
@@ -1025,7 +1011,6 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     y: int,
     title: str,
     charts: list,
-    prefix: str,
     rows: int,
     goal_factors: list[float] | None,
 ) -> int:
@@ -1050,7 +1035,7 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
                 GOAL_INCREASE,
                 goal_factors[index],
             )
-        _draw_rating_card_new(img, draw, cx, cy, f"{prefix}{index + 1}", chart, goal)
+        _draw_rating_card_new(img, draw, cx, cy, chart, goal)
     return y + rows * (CARD2_PLATE_H + CARD2_GAP)
 
 
@@ -1109,10 +1094,10 @@ def render_card_new(
     b30_factors = [b30_goal_factor()] * len(result.b30_charts)
     n10_factors = [n10_goal_factor(i) for i in range(len(result.n10_charts))]
     y = _draw_rating_section_new(
-        img, draw, y, "B30", result.b30_charts, "B", b30_rows, b30_factors
+        img, draw, y, "B30", result.b30_charts, b30_rows, b30_factors
     )
     y = _draw_rating_section_new(
-        img, draw, y, "N10", result.n10_charts, "N", n10_rows, n10_factors
+        img, draw, y, "N10", result.n10_charts, n10_rows, n10_factors
     )
 
     buf = io.BytesIO()
