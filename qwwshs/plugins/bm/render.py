@@ -886,9 +886,8 @@ CARD2_BASE = 30  # 普通文字字号（GOAL/定数，加粗）
 CARD2_SCORE = 44  # 分数字号（加粗；48 时 7 位满分溢出文字区）
 CARD2_TITLE_MAX = 33  # 曲名字号（原 22 的 1.5 倍；单行，过长截断加 …）
 CARD2_GOAL = (204, 204, 204)  # GOAL 行颜色：alpha 80%
-CARD2_INK_GAP = 10  # 文字行间墨迹最小间距
 CARD2_GRADE_H = 60  # 评级图高度（原 90 的 2/3），放底板右下角
-CARD2_GRADE_M = 10  # 评级图右下边距（避开上方 GOAL 行）
+CARD2_GRADE_M = 7  # 评级图右下边距（避开上方 rating 潜力行）
 CARD2_GAP = 12  # 卡片间距
 CARD2_PER_ROW = 5  # 每行卡片数
 CARD2_PAD = 30
@@ -1095,9 +1094,9 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
 ) -> None:
     """新版单曲卡：2:1 不透明圆角底板，内嵌 0.9 高曲绘（四边等距）。
 
-    右侧文字区：曲名上边缘与曲绘齐平、行间墨迹间隔 10px（无分割线、无序号）：
-    曲名（单行，过长截断加 …）/ 分数 / ->GOAL（alpha 80%）/ 定数；
-    评级图片放底板右下角（2/3 大小）。
+    右侧文字区：曲名上边缘与曲绘齐平、行间贴紧（无分割线、无序号）：
+    曲名（单行，过长截断加 …）/ 分数 / ->GOAL（alpha 80%）/ 定数 /
+    rating:潜力（字号与定数相同）；评级图片放底板右下角。
     """
     color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
     draw.rounded_rectangle(
@@ -1125,7 +1124,8 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
             anchor="mm",
         )
 
-    # 右侧文字区：曲名上边缘与曲绘齐平，行间墨迹间隔 CARD2_INK_GAP
+    # 右侧文字区：曲名上边缘与曲绘齐平；行距自适应，
+    # 保证曲名/分数/GOAL/定数/rating 潜力共 5 行都排在评级徽章上方
     lx = cx + CARD2_COVER + CARD2_TEXT_GAP
     right = x + CARD2_PLATE_W - CARD2_TEXT_PAD
     ink_top = y + CARD2_COVER_M
@@ -1137,7 +1137,7 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     )
     t_top, t_bottom = _text_ink(title_text, CARD2_TITLE_MAX, bold=True)
     draw.text((lx, ink_top - t_top), title_text, font=title_font, fill=(255, 255, 255))
-    ink_top += t_bottom - t_top + CARD2_INK_GAP
+    ink_top += t_bottom - t_top
 
     # 分数：紧贴曲名下方
     score_text = f"{chart.score}"
@@ -1148,29 +1148,41 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
         font=_font(CARD2_SCORE, bold=True),
         fill=(255, 255, 255),
     )
-    ink_top += s_bottom - s_top + CARD2_INK_GAP
+    ink_top += s_bottom - s_top
 
     # GOAL：->目标分数（alpha 80%）；无法推分显示 ->当前分数
-    if goal is not None:
-        goal_text = f"->{goal}" if goal > 0 else f"->{chart.score}"
-        g_top, g_bottom = _text_ink(goal_text, CARD2_BASE, bold=True)
-        draw.text(
-            (lx, ink_top - g_top),
-            goal_text,
-            font=_font(CARD2_BASE, bold=True),
-            fill=CARD2_GOAL,
-        )
-        ink_top += g_bottom - g_top + CARD2_INK_GAP
+    goal_text = f"->{goal}" if goal is not None and goal > 0 else f"->{chart.score}"
+    g_top, g_bottom = _text_ink(goal_text, CARD2_BASE, bold=True)
+    draw.text(
+        (lx, ink_top - g_top),
+        goal_text,
+        font=_font(CARD2_BASE, bold=True),
+        fill=CARD2_GOAL,
+    )
+    ink_top += g_bottom - g_top
 
     # 定数（左）
     const_text = f"{chart.constant:.1f}"
-    c_top, _ = _text_ink(const_text, CARD2_BASE, bold=True)
+    c_top, c_bottom = _text_ink(const_text, CARD2_BASE, bold=True)
     draw.text(
         (lx, ink_top - c_top),
         const_text,
         font=_font(CARD2_BASE, bold=True),
         fill=(255, 255, 255),
     )
+    ink_top += c_bottom - c_top
+
+    # rating 潜力：定数下方，字号与定数相同
+    pot_text = f"rating:{chart.potential:.3f}"
+    p_top, p_bottom = _text_ink(pot_text, CARD2_BASE, bold=True)
+    draw.text(
+        (lx, ink_top - p_top),
+        pot_text,
+        font=_font(CARD2_BASE, bold=True),
+        fill=(255, 255, 255),
+    )
+    ink_top += p_bottom - p_top
+
     # 评级图片：底板右下角
     grade_image = _load_grade_image(get_grade(chart.score))
     if grade_image is not None:
@@ -1193,9 +1205,15 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     rows: int,
     goal_factors: list[float] | None,
 ) -> int:
-    """新版分区：标题 + 分割线 + 网格（每行 5 首，含 GOAL 推分目标）。"""
+    """新版分区：标题（居中）+ 分割线 + 网格（每行 5 首，含 GOAL 推分目标）。"""
     y += 24
-    draw.text((CARD2_PAD, y), title, font=_font(30, bold=True), fill=CARD2_TEXT)
+    draw.text(
+        (img.width / 2, y),
+        title,
+        font=_font(30, bold=True),
+        fill=CARD2_TEXT,
+        anchor="ma",
+    )
     y += 34
     draw.line([(CARD2_PAD, y), (img.width - CARD2_PAD, y)], fill=CARD2_DIVIDER, width=2)
     y += 14
