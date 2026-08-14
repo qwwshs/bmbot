@@ -837,13 +837,15 @@ def render_list_image(text: str) -> bytes:
 
 CARD2_PLATE_H = 220  # 底板高度
 CARD2_PLATE_W = 2 * CARD2_PLATE_H  # 底板宽度（2:1）
-CARD2_COVER = int(CARD2_PLATE_H * 0.75)  # 曲绘 1:1 边长 = 底板高的 0.75
-CARD2_COVER_X = CARD2_PLATE_W // 4  # 曲绘左边距 = 底板宽的 1/4
+CARD2_COVER = int(CARD2_PLATE_H * 0.9)  # 曲绘 1:1 边长 = 底板高的 0.9
+CARD2_COVER_X = CARD2_PLATE_W // 16  # 曲绘左边距 = 底板宽的 1/16
 CARD2_TEXT_GAP = 12  # 曲绘右缘与右侧文字区间距
 CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
-CARD2_RADIUS = 16  # 底板圆角半径
+CARD2_RADIUS = 10  # 底板圆角半径
+CARD2_ALPHA = 0.8  # 底板不透明度 80%（与卡片背景合成）
 CARD2_BASE = 16  # 基准字号（分数为其他文字的 2 倍）
-CARD2_GOAL = (75, 75, 75)  # GOAL 行颜色：alpha 75
+CARD2_GOAL = (204, 204, 204)  # GOAL 行颜色：alpha 80%
+CARD2_STRIP = 9  # 曲绘下方条带字号（条带仅 0.1 底板高）
 CARD2_GAP = 12  # 卡片间距
 CARD2_PER_ROW = 5  # 每行卡片数
 CARD2_PAD = 30
@@ -896,6 +898,11 @@ def _draw_matrix_compact(
     return y
 
 
+def _blend_alpha(color: tuple[int, int, int], alpha: float) -> tuple[int, int, int]:
+    """颜色与卡片背景按不透明度合成（模拟半透明底板）。"""
+    return tuple(round(c * alpha + b * (1 - alpha)) for c, b in zip(color, CARD2_BG))
+
+
 def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     img: Image.Image,
     draw: ImageDraw.ImageDraw,
@@ -905,13 +912,15 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     chart: Chart,
     goal: int | None,
 ) -> None:
-    """新版单曲卡：2:1 难度色圆角底板，内嵌 0.75 高曲绘（纵向居中、左边距 1/4）。
+    """新版单曲卡：2:1 半透明(80%)圆角底板，内嵌 0.9 高曲绘（纵向居中、左边距 1/16）。
 
     右侧文字区从上到下：曲名（固定两行高）/ 分割线 / 分数（2 倍字号）/
-    ->GOAL（alpha 75，无法推分显示 ->分数）/ 评级（靠右）；
+    ->GOAL（alpha 80%，无法推分显示 ->分数）/ 评级（靠右）；
     曲绘下方条带：左序号、右定数。无难度文字。
     """
-    color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
+    color = _blend_alpha(
+        CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140)), CARD2_ALPHA
+    )
     draw.rounded_rectangle(
         [x, y, x + CARD2_PLATE_W - 1, y + CARD2_PLATE_H - 1],
         radius=CARD2_RADIUS,
@@ -937,10 +946,10 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
             anchor="mm",
         )
 
-    # 右侧文字区：总高度为底板高的 0.75，整体纵向居中，剩余空隙均分
+    # 右侧文字区：总高度为底板高的 0.9，整体纵向居中，剩余空隙均分
     lx = cx + CARD2_COVER + CARD2_TEXT_GAP
     right = x + CARD2_PLATE_W - CARD2_TEXT_PAD
-    block_h = int(CARD2_PLATE_H * 0.75)
+    block_h = int(CARD2_PLATE_H * 0.9)
     top = y + (CARD2_PLATE_H - block_h) // 2
     title_h = 2 * (CARD2_BASE + 2)
     divider_h = 2
@@ -986,19 +995,19 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
         fill=GRADE_COLORS[grade],
         anchor="ra",
     )
-    # 曲绘下方条带（曲绘下缘到底板下缘）：左序号、右定数
+    # 曲绘下方条带（曲绘下缘到底板下缘）：左序号、右定数（条带窄，用小字号）
     strip_cy = (cy + CARD2_COVER + y + CARD2_PLATE_H) // 2
     draw.text(
         (cx, strip_cy),
         rank_label,
-        font=_font(CARD2_BASE, bold=True),
+        font=_font(CARD2_STRIP, bold=True),
         fill=(255, 255, 255),
         anchor="lm",
     )
     draw.text(
         (right, strip_cy),
         f"{chart.constant:.1f}",
-        font=_font(CARD2_BASE),
+        font=_font(CARD2_STRIP),
         fill=(255, 255, 255),
         anchor="rm",
     )
