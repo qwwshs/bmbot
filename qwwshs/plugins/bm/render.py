@@ -969,10 +969,10 @@ def _draw_grade_matrix(
     grade_counts: dict,
     right: int | None = None,
 ) -> int:
-    """等级分布表：字号与曲名相同（CARD2_TITLE_MAX），黑底白框。
+    """等级分布表：字号与曲名相同（CARD2_TITLE_MAX），黑色背景无边框。
 
     ``right`` 为空时靠左（CARD2_PAD），否则整表右对齐到 ``right``；
-    等级行用 score/ 图片（水平居中于「等级」二字），缺图（F）回退文字。
+    等级行用 score/ 图片（水平居中于「等级」二字），F 无图仅保留行。
     返回外框底边 y。
     """
     font = _font(CARD2_TITLE_MAX, bold=True)
@@ -984,12 +984,10 @@ def _draw_grade_matrix(
     left = CARD2_PAD if right is None else right - matrix_w
     box_top = y - pad
     box_bottom = y + (1 + len(GRADES)) * row_h + pad
-    # 黑色背景 + 白色边框
+    # 黑色背景
     draw.rectangle(
         [left - pad, box_top, left + matrix_w + pad, box_bottom],
         fill=(0, 0, 0),
-        outline=(255, 255, 255),
-        width=2,
     )
     cy = y + 20
     draw.text((left, cy), "等级", font=font, fill=CARD2_MUTED, anchor="lm")
@@ -1012,14 +1010,6 @@ def _draw_grade_matrix(
                 grade_image,
                 (label_cx - grade_image.width // 2, cy - grade_image.height // 2),
                 grade_image,
-            )
-        else:
-            draw.text(
-                (left, cy),
-                grade,
-                font=font,
-                fill=GRADE_COLORS[grade],
-                anchor="lm",
             )
         for index, diff in enumerate(ALL_DIFFS):
             draw.text(
