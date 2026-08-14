@@ -912,9 +912,29 @@ CARD2_RATING_BADGE = (255, 24, 48)  # Rating 徽章颜色 #FF1830
 
 _avatar_cache: dict[str, Image.Image | None] = {}
 
-# 存档角色名 → images/ 头像文件名对照（部分角色名称与图片文件名不一致）
+# 存档角色 Path → images/ 头像文件名（头像文件名多为角色 EName，少数特例：
+# Anki 用 Path、RA-S 去连字符、Helios 带 1、另附 EName 形式兜底）
 CHAR_AVATAR_FILES = {
+    "Elidia": "Elodea",
+    "Orila": "Ayira",
+    "Chao": "Presagio",
+    "Coin": "Arcas",
+    "Reporter": "Moneta",
+    "qqx": "Asher Spencer",
+    "Bat": "Shiroma",
+    "Jinuo": "Gino",
+    "Jiu": "Geopelia",
+    "WuXi": "Dancy",
     "RA-S": "Ras",
+    "Hitomi": "Hitomi Miyafuji",
+    "Rina": "Rina Izuki",
+    "Helios": "Helios1",
+    "LWY": "Luvia",
+    "Luna": "Luna Ambrosia",
+    # EName 形式兜底（存档若直接存英文名）
+    "Ankie": "Anki",
+    "Sèat": "Seat",
+    "R.R.": "RR",
 }
 
 
