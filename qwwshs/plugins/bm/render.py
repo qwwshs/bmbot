@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import io
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -82,6 +83,35 @@ _POT_X = 1040
 
 _font_cache: dict[tuple[int, bool], ImageFont.FreeTypeFont] = {}
 
+# 随插件分发的字体目录（fonts/ 下的 otf/ttf/ttc 优先生效，如 Dream Han Sans J W20）
+_FONT_DIR = Path(__file__).resolve().parent / "fonts"
+
+
+@lru_cache(maxsize=1)
+def _bundled_font_path() -> tuple[str, int] | None:
+    """fonts/ 下第一个字体文件；TTC 合集按名称优先选 J 字面。
+
+    返回 (路径, 字面索引)。
+    """
+    for ext in ("*.otf", "*.ttf", "*.ttc", "*.otc"):
+        paths = sorted(_FONT_DIR.glob(ext))
+        if not paths:
+            continue
+        path = str(paths[0])
+        index = 0
+        if path.lower().endswith((".ttc", ".otc")):
+            for i in range(8):
+                try:
+                    name = ImageFont.truetype(path, 16, index=i).getname()[0]
+                except (OSError, ValueError):
+                    break
+                if " J" in name:
+                    index = i
+                    break
+        return (path, index)
+    return None
+
+
 # 中日文字体候选：Windows 与常见 Linux 发行版路径
 _FONT_CANDIDATES = [
     # Windows
@@ -108,6 +138,16 @@ _FONT_CANDIDATES = [
 def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
     key = (size, bold)
     if key not in _font_cache:
+        # 打包字体优先（仅一个字重，粗体/常规共用），其次粗体/常规对应文件
+        bundled = _bundled_font_path()
+        if bundled is not None:
+            try:
+                _font_cache[key] = ImageFont.truetype(
+                    bundled[0], size, index=bundled[1]
+                )
+                return _font_cache[key]
+            except OSError:
+                pass
         bold_paths = [p for p in _FONT_CANDIDATES if "Bold" in p or "bd" in p]
         regular_paths = [
             p for p in _FONT_CANDIDATES if "Bold" not in p and "bd" not in p
