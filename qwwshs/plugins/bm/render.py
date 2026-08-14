@@ -899,7 +899,7 @@ CARD2_DIVIDER = (70, 70, 70)
 CARD2_ACCENT = (220, 220, 220)
 
 # 头部：角色头像 + 名字条 + Rating 徽章
-CARD2_AVATAR = 320  # 头像边长（原 160 的 2 倍）
+CARD2_AVATAR = 160  # 头像边长（原 320 的 1/2）
 CARD2_AVATAR_X = CARD2_AVATAR // 4  # 头像右移 1/4
 CARD2_AVATAR_TOP = CARD2_AVATAR // 4  # 头像顶部边距
 CARD2_NAME_BAR_H = CARD2_AVATAR // 2  # 名字条高度 = 头像 1/2
@@ -910,6 +910,7 @@ CARD2_RATING_BADGE_W = CARD2_NAME_BAR_W // 5  # Rating 徽章宽 = 名字条 1/5
 CARD2_RATING_BADGE_H = CARD2_NAME_BAR_H // 2  # Rating 徽章高 = 名字条 1/2
 CARD2_RATING_BADGE = (255, 24, 48)  # Rating 徽章颜色 #FF1830
 CARD2_RATING_FONT = CARD2_RATING_BADGE_H * 3 // 5  # Rating 徽章字
+CARD2_MATRIX_PAD = 8  # 等级分布黑底白框内边距
 
 
 _avatar_cache: dict[str, Image.Image | None] = {}
@@ -968,19 +969,31 @@ def _draw_grade_matrix(
     grade_counts: dict,
     right: int | None = None,
 ) -> int:
-    """等级分布表：字号与曲名相同（CARD2_TITLE_MAX）。
+    """等级分布表：字号与曲名相同（CARD2_TITLE_MAX），黑底白框。
 
     ``right`` 为空时靠左（CARD2_PAD），否则整表右对齐到 ``right``；
-    等级行用 score/ 图片，缺图（F）回退文字。
+    等级行用 score/ 图片（水平居中于「等级」二字），缺图（F）回退文字。
+    返回外框底边 y。
     """
     font = _font(CARD2_TITLE_MAX, bold=True)
     label_w = 100
     col_w = 132
     row_h = 44
+    pad = CARD2_MATRIX_PAD
     matrix_w = label_w + len(ALL_DIFFS) * col_w
     left = CARD2_PAD if right is None else right - matrix_w
+    box_top = y - pad
+    box_bottom = y + (1 + len(GRADES)) * row_h + pad
+    # 黑色背景 + 白色边框
+    draw.rectangle(
+        [left - pad, box_top, left + matrix_w + pad, box_bottom],
+        fill=(0, 0, 0),
+        outline=(255, 255, 255),
+        width=2,
+    )
     cy = y + 20
     draw.text((left, cy), "等级", font=font, fill=CARD2_MUTED, anchor="lm")
+    label_cx = left + int(font.getlength("等级")) // 2  # 「等级」二字中心
     for index, diff in enumerate(ALL_DIFFS):
         draw.text(
             (left + label_w + index * col_w + col_w // 2, cy),
@@ -995,7 +1008,11 @@ def _draw_grade_matrix(
         cy = y + row_h // 2
         grade_image = _load_grade_image(grade, height=image_h)
         if grade_image is not None:
-            img.paste(grade_image, (left, cy - grade_image.height // 2), grade_image)
+            img.paste(
+                grade_image,
+                (label_cx - grade_image.width // 2, cy - grade_image.height // 2),
+                grade_image,
+            )
         else:
             draw.text(
                 (left, cy),
@@ -1013,7 +1030,7 @@ def _draw_grade_matrix(
                 anchor="mm",
             )
         y += row_h
-    return y + 16
+    return box_bottom
 
 
 SCORE_DIR = Path(__file__).resolve().parent / "score"
@@ -1233,8 +1250,11 @@ def render_card_new(
     n10_rows = (len(result.n10_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
     grid_h = CARD2_PLATE_H + CARD2_GAP
     section_h = 24 + 34 + 14
-    matrix_h = (1 + len(GRADES)) * 44 + 16
-    header_h = max(CARD2_AVATAR_TOP + CARD2_AVATAR, CARD2_AVATAR_TOP + matrix_h)
+    matrix_h = (1 + len(GRADES)) * 44 + 2 * CARD2_MATRIX_PAD
+    header_h = max(
+        CARD2_AVATAR_TOP + CARD2_AVATAR,
+        CARD2_AVATAR_TOP + matrix_h - CARD2_MATRIX_PAD,
+    )
     height = (
         header_h
         + 24
