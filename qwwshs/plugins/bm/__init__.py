@@ -102,11 +102,9 @@ _OLD_BINDINGS_PATH = Path(__file__).resolve().parent / "data" / "bindings.json"
 _FILE_WAIT_TTL = 300.0
 _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
-# 谱师谱面列表单次最多显示的条目数
-_CHARTER_LIST_LIMIT = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.3.2"
+BM_VERSION = "0.3.3"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -925,35 +923,25 @@ def _charter_entries(charter_name: str) -> list[tuple[str, list[str]]]:
     return charts
 
 
-async def _send_charter_page(matcher: Matcher, state: dict) -> None:
-    """渲染并发送谱面列表当前页（全局连续序号；多页时提示翻页）。"""
+async def _send_charter_list(matcher: Matcher, state: dict) -> None:
+    """渲染并发送谱师谱面列表（全部曲目一张图，全局连续序号供选择）。"""
     charter_name = state["charter_name"]
     charts: list[tuple[str, list[str]]] = state["charts"]
-    page = state["page"]
-    total = len(charts)
-    pages = max(1, (total + _CHARTER_LIST_LIMIT - 1) // _CHARTER_LIST_LIMIT)
-    start = page * _CHARTER_LIST_LIMIT
-    shown = charts[start : start + _CHARTER_LIST_LIMIT]
     lines = [f"🎵 谱师：{charter_name}"]
     group = group_of(charter_name)
     if len(group) > 1:
         others = "、".join(sorted(name for name in group if name != charter_name))
         lines.append(f"（含关联名义：{others}）")
     lines.extend(
-        f"{start + i + 1}. {_display_name(song)} {'/'.join(diffs)}"
-        for i, (song, diffs) in enumerate(shown)
+        f"{i + 1}. {_display_name(song)} {'/'.join(diffs)}"
+        for i, (song, diffs) in enumerate(charts)
     )
-    if pages > 1:
-        lines.append(
-            f"—— 第 {page + 1}/{pages} 页（共 {total} 首）· "
-            "发送「下一页/上一页」翻页 · 回复序号查看歌曲 ——"
-        )
     img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
     await matcher.finish(MessageSegment.image(img_bytes))
 
 
 async def _show_charter_charts(matcher: Matcher, qq: str, charter_name: str) -> None:
-    """输出谱师谱面列表（分页显示），供序号选择与翻页。"""
+    """输出谱师谱面列表（一张图），供序号选择歌曲详情。"""
     charts = _charter_entries(charter_name)
     if not charts:
         await matcher.finish(f"❌ 谱师「{charter_name}」暂无谱面记录")
@@ -961,10 +949,9 @@ async def _show_charter_charts(matcher: Matcher, qq: str, charter_name: str) -> 
         "action": "chart_pick",
         "charter_name": charter_name,
         "charts": charts,
-        "page": 0,
         "expire": time.monotonic() + _SONG_PICK_TTL,
     }
-    await _send_charter_page(matcher, _charter_pending[qq])
+    await _send_charter_list(matcher, _charter_pending[qq])
 
 
 @bm_charter.handle()
@@ -1228,18 +1215,6 @@ async def _handle_charter_name_input(qq: str, state: dict, text: str) -> None:
     await bm_charter_pick.send(MessageSegment.image(img_bytes))
 
 
-async def _handle_charter_page_flip(qq: str, state: dict, nav: str) -> None:
-    """谱面列表翻页：更新页码并重新渲染。"""
-    total = len(state["charts"])
-    pages = max(1, (total + _CHARTER_LIST_LIMIT - 1) // _CHARTER_LIST_LIMIT)
-    if nav in ("下一页", "n"):
-        state["page"] = min(pages - 1, state["page"] + 1)
-    else:
-        state["page"] = max(0, state["page"] - 1)
-    _charter_pending[qq] = state
-    await _send_charter_page(bm_charter_pick, state)
-
-
 async def _handle_charter_number_pick(qq: str, state: dict, index: int) -> None:
     """序号选择阶段：按动作分发到对应流程。"""
     action = state["action"]
@@ -1298,10 +1273,6 @@ async def handle_charter_pick(event: MessageEvent) -> None:
     if action in ("related_name", "remove_name"):
         if text:
             await _handle_charter_name_input(qq, state, text)
-        return
-    # 谱面列表翻页
-    if action == "chart_pick" and text in ("下一页", "上一页", "n", "p"):
-        await _handle_charter_page_flip(qq, state, text)
         return
     if text.isdigit():
         await _handle_charter_number_pick(qq, state, int(text))
