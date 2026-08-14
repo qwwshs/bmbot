@@ -842,12 +842,11 @@ CARD2_COVER_M = (CARD2_PLATE_H - CARD2_COVER) // 2  # 曲绘左/上/下与底板
 CARD2_TEXT_GAP = 12  # 曲绘右缘与右侧文字区间距
 CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
 CARD2_RADIUS = 10  # 底板圆角半径
-CARD2_ALPHA = 0.4  # 底板不透明度（原 0.8 的 50%）
-CARD2_BASE = 26  # 普通文字字号（GOAL/评级/定数，加粗）
+CARD2_BASE = 30  # 普通文字字号（GOAL/定数，加粗）
 CARD2_SCORE = 44  # 分数字号（加粗；48 时 7 位满分溢出文字区）
-CARD2_TITLE_MAX = 44  # 曲名最大字号（明显大于其他文字，两行固定高）
-CARD2_TITLE_MIN = 20  # 曲名字号下限（放不下时截断）
+CARD2_TITLE_MAX = 44  # 曲名字号（单行，过长截断加 …）
 CARD2_GOAL = (204, 204, 204)  # GOAL 行颜色：alpha 80%
+CARD2_INK_GAP = 3  # 文字行间墨迹最小间距（尽量贴紧）
 CARD2_GAP = 12  # 卡片间距
 CARD2_PER_ROW = 5  # 每行卡片数
 CARD2_PAD = 30
@@ -900,9 +899,69 @@ def _draw_matrix_compact(
     return y
 
 
-def _blend_alpha(color: tuple[int, int, int], alpha: float) -> tuple[int, int, int]:
-    """颜色与卡片背景按不透明度合成（模拟半透明底板）。"""
-    return tuple(round(c * alpha + b * (1 - alpha)) for c, b in zip(color, CARD2_BG))
+SCODE_DIR = Path(__file__).resolve().parent / "scode"
+
+# 评级图片（scode/ 下小写文件名；F 无图片回退文字）
+_GRADE_IMAGE_FILES = {
+    "S": "s.png",
+    "AAA+": "aaa+.png",
+    "AAA": "aaa.png",
+    "AA": "aa.png",
+    "A": "a.png",
+    "B": "b.png",
+}
+_grade_image_cache: dict[str, Image.Image | None] = {}
+
+
+def _load_grade_image(grade: str) -> Image.Image | None:
+    """从 scode/ 加载评级图片（裁剪透明区并缩放到评级行高），未找到返回 None。"""
+    if grade not in _grade_image_cache:
+        image = None
+        filename = _GRADE_IMAGE_FILES.get(grade)
+        if filename:
+            path = SCODE_DIR / filename
+            if path.exists():
+                try:
+                    rgba = Image.open(path).convert("RGBA")
+                    bbox = rgba.getchannel("A").getbbox()
+                    if bbox:
+                        rgba = rgba.crop(bbox)
+                    height = CARD2_BASE + 6
+                    width = max(1, round(rgba.width * height / rgba.height))
+                    image = rgba.resize((width, height), Image.Resampling.LANCZOS)
+                except OSError:
+                    image = None
+        _grade_image_cache[grade] = image
+    return _grade_image_cache[grade]
+
+
+_ink_cache: dict[tuple[str, int, bool], tuple[int, int]] = {}
+
+
+def _text_ink(text: str, size: int, *, bold: bool = True) -> tuple[int, int]:
+    """文字墨迹相对锚点 y（anchor='la'）的 (上, 下) 偏移，用于行间贴紧。"""
+    key = (text, size, bold)
+    hit = _ink_cache.get(key)
+    if hit is not None:
+        return hit
+    font = _font(size, bold=bold)
+    pad = 8
+    probe = Image.new(
+        "RGB", (int(font.getlength(text)) + pad * 2, size * 2 + pad * 2), (0, 0, 0)
+    )
+    probe_draw = ImageDraw.Draw(probe)
+    probe_draw.text((pad, pad), text, font=font, fill=(255, 255, 255))
+    top = bottom = None
+    for yy in range(probe.height):
+        for xx in range(probe.width):
+            if probe.getpixel((xx, yy)) != (0, 0, 0):
+                if top is None:
+                    top = yy
+                bottom = yy
+                break
+    hit = (top - pad, bottom - pad)
+    _ink_cache[key] = hit
+    return hit
 
 
 def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
@@ -913,15 +972,13 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     chart: Chart,
     goal: int | None,
 ) -> None:
-    """新版单曲卡：2:1 半透明(40%)圆角底板，内嵌 0.9 高曲绘（四边等距）。
+    """新版单曲卡：2:1 不透明圆角底板，内嵌 0.9 高曲绘（四边等距）。
 
-    右侧文字区从上到下（均加粗，尽量占满 0.9 高，无分割线）：
-    曲名（固定两行高、额外加大）/ 分数 / ->GOAL（alpha 80%，无法推分显示 ->分数）/
-    定数+评级同一行（靠左/靠右）。无序号。
+    右侧文字区靠上排列且行间按墨迹贴紧（无分割线、无序号）：
+    曲名（单行，过长截断加 …）/ 分数 / ->GOAL（alpha 80%）/
+    定数 + 评级（图片优先，缺图回退文字）。
     """
-    color = _blend_alpha(
-        CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140)), CARD2_ALPHA
-    )
+    color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
     draw.rounded_rectangle(
         [x, y, x + CARD2_PLATE_W - 1, y + CARD2_PLATE_H - 1],
         radius=CARD2_RADIUS,
@@ -947,62 +1004,70 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
             anchor="mm",
         )
 
-    # 右侧文字区：总高度为底板高的 0.9，整体纵向居中，剩余空隙均分
+    # 右侧文字区：靠上排列，下一行墨迹顶部 = 上一行墨迹底部 + CARD2_INK_GAP
     lx = cx + CARD2_COVER + CARD2_TEXT_GAP
     right = x + CARD2_PLATE_W - CARD2_TEXT_PAD
-    block_h = int(CARD2_PLATE_H * 0.9)
-    top = y + (CARD2_PLATE_H - block_h) // 2
-    title_h = 2 * (CARD2_TITLE_MAX + 2)
-    score_h = CARD2_SCORE + 2
-    goal_h = CARD2_BASE + 2
-    const_grade_h = CARD2_BASE + 2
-    content_h = title_h + score_h + goal_h + const_grade_h
-    gap, extra = divmod(block_h - content_h, 3)
+    ink_top = y + CARD2_COVER_M
 
-    # 曲名：固定两行高度（字号自适应，加粗、额外加大），任何情况下高度一致
-    lines, size = _fit_chart_title(
-        draw,
-        chart.original_name or chart.name,
-        right - lx,
-        max_size=CARD2_TITLE_MAX,
-        min_size=CARD2_TITLE_MIN,
+    # 曲名：单行，过长截断加 …
+    title_font = _font(CARD2_TITLE_MAX, bold=True)
+    title_text = _ellipsize(
+        draw, chart.original_name or chart.name, title_font, right - lx
     )
-    ty = top
-    line_h = size + 2
-    for line in lines:
-        draw.text((lx, ty), line, font=_font(size, bold=True), fill=(255, 255, 255))
-        ty += line_h
-    # 分数：加粗
-    ty = top + title_h + gap + extra
+    t_top, t_bottom = _text_ink(title_text, CARD2_TITLE_MAX, bold=True)
+    draw.text((lx, ink_top - t_top), title_text, font=title_font, fill=(255, 255, 255))
+    ink_top += t_bottom - t_top + CARD2_INK_GAP
+
+    # 分数：紧贴曲名下方
+    score_text = f"{chart.score}"
+    s_top, s_bottom = _text_ink(score_text, CARD2_SCORE, bold=True)
     draw.text(
-        (lx, ty),
-        f"{chart.score}",
+        (lx, ink_top - s_top),
+        score_text,
         font=_font(CARD2_SCORE, bold=True),
         fill=(255, 255, 255),
     )
-    # GOAL：->目标分数（alpha 80%，加粗）；无法推分显示 ->当前分数
-    ty += score_h + gap
+    ink_top += s_bottom - s_top + CARD2_INK_GAP
+
+    # GOAL：->目标分数（alpha 80%）；无法推分显示 ->当前分数
     if goal is not None:
         goal_text = f"->{goal}" if goal > 0 else f"->{chart.score}"
+        g_top, g_bottom = _text_ink(goal_text, CARD2_BASE, bold=True)
         draw.text(
-            (lx, ty), goal_text, font=_font(CARD2_BASE, bold=True), fill=CARD2_GOAL
+            (lx, ink_top - g_top),
+            goal_text,
+            font=_font(CARD2_BASE, bold=True),
+            fill=CARD2_GOAL,
         )
-    # 定数与评级同一行（goal 下方）：定数靠左、评级靠右
-    ty += goal_h + gap
+        ink_top += g_bottom - g_top + CARD2_INK_GAP
+
+    # 定数（左）+ 评级（右；图片优先，缺图回退文字）
+    const_text = f"{chart.constant:.1f}"
+    c_top, c_bottom = _text_ink(const_text, CARD2_BASE, bold=True)
     draw.text(
-        (lx, ty),
-        f"{chart.constant:.1f}",
+        (lx, ink_top - c_top),
+        const_text,
         font=_font(CARD2_BASE, bold=True),
         fill=(255, 255, 255),
     )
     grade = get_grade(chart.score)
-    draw.text(
-        (right, ty),
-        grade,
-        font=_font(CARD2_BASE, bold=True),
-        fill=GRADE_COLORS[grade],
-        anchor="ra",
-    )
+    grade_image = _load_grade_image(grade)
+    if grade_image is not None:
+        row_cy = ink_top - c_top + (c_bottom - c_top) // 2  # 本行墨迹中心
+        img.paste(
+            grade_image,
+            (right - grade_image.width, row_cy - grade_image.height // 2),
+            grade_image,
+        )
+    else:
+        g_top, _ = _text_ink(grade, CARD2_BASE, bold=True)
+        draw.text(
+            (right, ink_top - g_top),
+            grade,
+            font=_font(CARD2_BASE, bold=True),
+            fill=GRADE_COLORS[grade],
+            anchor="ra",
+        )
 
 
 def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
