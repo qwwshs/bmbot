@@ -1049,13 +1049,14 @@ def _draw_grade_matrix(
             fill=(0, 0, 0),
         )
     cy = y + 20
-    draw.text((left, cy), "等级", font=font, fill=CARD2_MUTED, anchor="lm")
+    # 矩阵内文字统一纯白 #FFFFFF
+    draw.text((left, cy), "等级", font=font, fill=(255, 255, 255), anchor="lm")
     for index, diff in enumerate(ALL_DIFFS):
         draw.text(
             (left + label_w + index * col_w + col_w // 2, cy),
             diff,
             font=font,
-            fill=CARD2_TEXT,
+            fill=(255, 255, 255),
             anchor="mm",
         )
     y += row_h
@@ -1065,7 +1066,7 @@ def _draw_grade_matrix(
             (left, cy),
             grade,
             font=font,
-            fill=GRADE_COLORS[grade],
+            fill=(255, 255, 255),
             anchor="lm",
         )
         for index, diff in enumerate(ALL_DIFFS):
@@ -1073,7 +1074,7 @@ def _draw_grade_matrix(
                 (left + label_w + index * col_w + col_w // 2, cy),
                 str(grade_counts[diff][grade]),
                 font=font,
-                fill=CARD2_TEXT,
+                fill=(255, 255, 255),
                 anchor="mm",
             )
         y += row_h
