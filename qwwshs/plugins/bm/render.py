@@ -534,16 +534,17 @@ CHART_DIFF_COLORS = {
 _CHART_CARD = 140  # 曲绘边长（1:1）
 _CHART_LABEL_H = 35  # 底部难度色矩形高（曲绘的 1/4）
 _CHART_PER_ROW = 5  # 每行歌曲数
-_CHART_COLS_PER_ROW = 2  # 每行定数列块数
 _CHART_GAP = 10
 _CHART_PAD = 14
-_CHART_COL_GAP = 24
-_CHART_TITLE_H = 30
+_CHART_BAND_GAP = 16  # 定数行（band）之间间距
+_CHART_HEADER_W = 110  # 每行最左定数表头宽度
 _CHART_TITLE_LINES = 2  # 曲名最多行数（固定占位高度）
 _CHART_TITLE_MAX = 11  # 曲名字号上限
 _CHART_TITLE_MIN = 6  # 曲名字号下限（放不下时截断）
-_CHART_BG = (247, 247, 247)
-_CHART_TEXT = (35, 35, 35)
+_CHART_BG = (0, 0, 0)  # 纯黑背景
+_CHART_TEXT = (255, 255, 255)
+_CHART_DIVIDER = (60, 60, 60)
+_CHART_PLACEHOLDER = (40, 40, 40)
 
 
 def _wrap_lines(
@@ -609,13 +610,14 @@ def _draw_chart_card(  # noqa: PLR0913, PLR0917
         img.paste(cover, (x, y))
     else:
         draw.rectangle(
-            [x, y, x + _CHART_CARD - 1, y + _CHART_CARD - 1], fill=(225, 225, 225)
+            [x, y, x + _CHART_CARD - 1, y + _CHART_CARD - 1],
+            fill=_CHART_PLACEHOLDER,
         )
         draw.text(
             (x + _CHART_CARD // 2, y + _CHART_CARD // 2),
             "♪",
             font=_font(40),
-            fill=(150, 150, 150),
+            fill=(120, 120, 120),
             anchor="mm",
         )
     color = CHART_DIFF_COLORS.get(diff, (140, 140, 140))
@@ -645,63 +647,58 @@ def _draw_chart_card(  # noqa: PLR0913, PLR0917
 
 
 def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
-    """绘制定数表图：按定数降序分列，列内歌曲每行 5 首，返回 PNG 字节。
+    """绘制定数表图：每个定数一行（最左为定数表头），行内歌曲每行 5 首。
 
-    ``charts`` 为 ``(定数, 曲名, 难度)`` 列表。
+    ``charts`` 为 ``(定数, 曲名, 难度)`` 列表；纯黑背景。
     """
     groups: dict[float, list[tuple[str, str]]] = {}
     for constant, song, diff in charts:
         groups.setdefault(constant, []).append((song, diff))
     ordered = sorted(groups.items(), key=lambda item: -item[0])
 
-    col_w = (
-        _CHART_PER_ROW * _CHART_CARD
+    card_h = _CHART_CARD + _CHART_LABEL_H + _CHART_GAP
+    width = (
+        _CHART_PAD
+        + _CHART_HEADER_W
+        + _CHART_PER_ROW * _CHART_CARD
         + (_CHART_PER_ROW - 1) * _CHART_GAP
-        + 2 * _CHART_PAD
+        + _CHART_PAD
     )
-    width = _CHART_COLS_PER_ROW * col_w + (_CHART_COLS_PER_ROW - 1) * _CHART_COL_GAP
-    blocks = [
-        ordered[index : index + _CHART_COLS_PER_ROW]
-        for index in range(0, len(ordered), _CHART_COLS_PER_ROW)
-    ]
-    block_heights: list[int] = []
-    for block in blocks:
-        rows = max(
-            (len(items) + _CHART_PER_ROW - 1) // _CHART_PER_ROW
-            for _constant, items in block
-        )
-        block_heights.append(
-            _CHART_TITLE_H + rows * (_CHART_CARD + _CHART_LABEL_H + _CHART_GAP)
-        )
-    height = _CHART_PAD + sum(block_heights) + _CHART_PAD * len(blocks) + _CHART_PAD
+    band_heights: list[int] = []
+    for _constant, items in ordered:
+        rows = (len(items) + _CHART_PER_ROW - 1) // _CHART_PER_ROW
+        band_heights.append(rows * card_h)
+    height = (
+        _CHART_PAD + sum(band_heights) + _CHART_BAND_GAP * len(ordered) + _CHART_PAD
+    )
 
     img = Image.new("RGB", (width, height), _CHART_BG)
     draw = ImageDraw.Draw(img)
     y = _CHART_PAD
-    for block, block_h in zip(blocks, block_heights):
-        x = _CHART_PAD
-        for constant, items in block:
-            draw.text(
-                (x + col_w // 2, y + 4),
-                f"{constant:.1f}",
-                font=_font(20, bold=True),
-                fill=_CHART_TEXT,
-                anchor="ma",
-            )
-            draw.line(
-                [(x, y + _CHART_TITLE_H), (x + col_w, y + _CHART_TITLE_H)],
-                fill=(190, 190, 190),
-                width=1,
-            )
-            for index, (song, diff) in enumerate(items):
-                col = index % _CHART_PER_ROW
-                row = index // _CHART_PER_ROW
-                cx = x + _CHART_PAD + col * (_CHART_CARD + _CHART_GAP)
-                card_h = _CHART_CARD + _CHART_LABEL_H + _CHART_GAP
-                cy = y + _CHART_TITLE_H + row * card_h
-                _draw_chart_card(img, draw, cx, cy, song, diff)
-            x += col_w + _CHART_COL_GAP
-        y += _CHART_PAD + block_h
+    for (constant, items), band_h in zip(ordered, band_heights):
+        # 最左定数表头（垂直居中）
+        draw.text(
+            (_CHART_PAD + _CHART_HEADER_W // 2, y + band_h // 2),
+            f"{constant:.1f}",
+            font=_font(22, bold=True),
+            fill=_CHART_TEXT,
+            anchor="mm",
+        )
+        # 表头与卡片区竖分隔线
+        divider_x = _CHART_PAD + _CHART_HEADER_W
+        draw.line(
+            [(divider_x, y), (divider_x, y + band_h)],
+            fill=_CHART_DIVIDER,
+            width=1,
+        )
+        for index, (song, diff) in enumerate(items):
+            col = index % _CHART_PER_ROW
+            row = index // _CHART_PER_ROW
+            # 右移 2px 露出表头分隔线
+            cx = divider_x + 2 + col * (_CHART_CARD + _CHART_GAP)
+            cy = y + row * card_h
+            _draw_chart_card(img, draw, cx, cy, song, diff)
+        y += band_h + _CHART_BAND_GAP
 
     buf = io.BytesIO()
     img.save(buf, "PNG")

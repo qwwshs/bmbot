@@ -1293,19 +1293,42 @@ _DIFF_TOKENS = {diff.lower(): diff for diff in ALL_DIFFS}
 _MAX_CONST_ARGS = 2
 
 
-def _parse_const_token(token: str) -> float:
-    """解析定数 token：``13+`` 表示 ``13.6``。"""
+def _parse_const_token(token: str) -> tuple[float, float]:
+    """解析定数 token → (下限, 上限)（闭区间）。
+
+    - 整数 ``13`` → ``[13.0, 13.5]``（该档不含 ``+`` 的下半档）
+    - ``13+`` → ``[13.6, 13.9]``（``+`` 到下一个整数档，不含下一个整数）
+    - 小数 ``13.4`` → ``[13.4, 13.4]``（精确定数）
+    """
     text = token.strip()
     if text.endswith("+"):
-        return float(text[:-1]) + 0.6
-    return float(text)
+        base = text[:-1]
+        if not base or "." in base:
+            raise ValueError(  # noqa: TRY003
+                f"「{token}」不合法：+ 仅用于整数档位（如 13+）"
+            )
+        try:
+            value = float(base)
+        except ValueError as exc:
+            raise ValueError(f"无法识别的定数「{token}」") from exc
+        return value + 0.6, value + 0.9
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise ValueError(f"无法识别的定数「{token}」") from exc
+    if "." in text:
+        return value, value
+    return value, value + 0.5
 
 
 def _parse_chart_args(
     args: list[str],
 ) -> tuple[float | None, float | None, list[str]]:
-    """解析 bmchart/bmrandom 参数 → (定数下限, 定数上限, 难度列表)。"""
-    consts: list[float] = []
+    """解析 bmchart/bmrandom 参数 → (定数下限, 定数上限, 难度列表)。
+
+    多个定数参数的区间取并集（``11 12`` → ``[11.0, 12.5]``，顺序无关）。
+    """
+    ranges: list[tuple[float, float]] = []
     diffs: list[str] = []
     for token in args:
         lower = token.strip().lower()
@@ -1313,16 +1336,13 @@ def _parse_chart_args(
             if _DIFF_TOKENS[lower] not in diffs:
                 diffs.append(_DIFF_TOKENS[lower])
             continue
-        try:
-            consts.append(_parse_const_token(token))
-        except ValueError as exc:
-            raise ValueError(f"无法识别的参数「{token}」（应为定数或难度）") from exc
-    if len(consts) > _MAX_CONST_ARGS:
+        ranges.append(_parse_const_token(token))
+    if len(ranges) > _MAX_CONST_ARGS:
         raise ValueError("定数参数最多两个（下限和上限）")
-    lower = consts[0] if consts else None
-    upper = consts[1] if len(consts) > 1 else None
-    if lower is not None and upper is not None and lower > upper:
-        lower, upper = upper, lower
+    if not ranges:
+        return None, None, diffs
+    lower = min(r[0] for r in ranges)
+    upper = max(r[1] for r in ranges)
     return lower, upper, diffs
 
 
@@ -1357,7 +1377,8 @@ async def handle_chart(arg: Message = CommandArg()) -> None:
     if not args:
         await bm_chart.finish(
             "用法：/bmchart <定数1> [定数2] [难度...]\n"
-            "例如：/bmchart 11 12 TT\n/bmchart 13+ RU（13+ 表示 13.6）\n"
+            "例如：/bmchart 11 12 TT\n/bmchart 13+ RU\n"
+            "定数：13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
             "/bmchart TT（全部定数）\n不写难度表示全部难度"
         )
     if not SONG_CONSTANTS:
