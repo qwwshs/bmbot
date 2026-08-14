@@ -838,14 +838,16 @@ def render_list_image(text: str) -> bytes:
 CARD2_PLATE_H = 220  # 底板高度
 CARD2_PLATE_W = 2 * CARD2_PLATE_H  # 底板宽度（2:1）
 CARD2_COVER = int(CARD2_PLATE_H * 0.9)  # 曲绘 1:1 边长 = 底板高的 0.9
-CARD2_COVER_X = CARD2_PLATE_W // 16  # 曲绘左边距 = 底板宽的 1/16
+CARD2_COVER_M = (CARD2_PLATE_H - CARD2_COVER) // 2  # 曲绘左/上/下与底板边缘等距
 CARD2_TEXT_GAP = 12  # 曲绘右缘与右侧文字区间距
 CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
 CARD2_RADIUS = 10  # 底板圆角半径
 CARD2_ALPHA = 0.8  # 底板不透明度 80%（与卡片背景合成）
-CARD2_BASE = 16  # 基准字号（分数为其他文字的 2 倍）
+CARD2_BASE = 18  # 普通文字字号（曲名/GOAL/评级/定数，均加粗）
+CARD2_SCORE = 32  # 分数字号（加粗）
+CARD2_TITLE_MIN = 12  # 曲名字号下限（放不下时截断）
 CARD2_GOAL = (204, 204, 204)  # GOAL 行颜色：alpha 80%
-CARD2_STRIP = 9  # 曲绘下方条带字号（条带仅 0.1 底板高）
+CARD2_STRIP = 9  # 曲绘下方条带序号字号（条带仅 0.1 底板高）
 CARD2_GAP = 12  # 卡片间距
 CARD2_PER_ROW = 5  # 每行卡片数
 CARD2_PAD = 30
@@ -912,11 +914,11 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     chart: Chart,
     goal: int | None,
 ) -> None:
-    """新版单曲卡：2:1 半透明(80%)圆角底板，内嵌 0.9 高曲绘（纵向居中、左边距 1/16）。
+    """新版单曲卡：2:1 半透明(80%)圆角底板，内嵌 0.9 高曲绘（左/上/下与底板等距）。
 
-    右侧文字区从上到下：曲名（固定两行高）/ 分割线 / 分数（2 倍字号）/
-    ->GOAL（alpha 80%，无法推分显示 ->分数）/ 评级（靠右）；
-    曲绘下方条带：左序号、右定数。无难度文字。
+    右侧文字区从上到下（均加粗）：曲名（固定两行高）/ 分割线 / 分数 /
+    ->GOAL（alpha 80%，无法推分显示 ->分数）/ 定数+评级同一行（靠左/靠右）；
+    曲绘下方条带：左序号。无难度文字。
     """
     color = _blend_alpha(
         CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140)), CARD2_ALPHA
@@ -926,9 +928,9 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
         radius=CARD2_RADIUS,
         fill=color,
     )
-    # 曲绘：缩到底板高的 0.75、纵向居中、左边距为底板宽的 1/4
-    cx = x + CARD2_COVER_X
-    cy = y + (CARD2_PLATE_H - CARD2_COVER) // 2
+    # 曲绘：0.9 底板高，左边缘/上边缘到底板距离相同（下边缘亦然）
+    cx = x + CARD2_COVER_M
+    cy = y + CARD2_COVER_M
     cover = load_cover(chart.name, chart.diff)
     if cover is not None:
         cover = cover.resize((CARD2_COVER, CARD2_COVER), Image.Resampling.LANCZOS)
@@ -953,40 +955,51 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     top = y + (CARD2_PLATE_H - block_h) // 2
     title_h = 2 * (CARD2_BASE + 2)
     divider_h = 2
-    score_h = CARD2_BASE * 2 + 10
-    goal_h = CARD2_BASE + 4
-    grade_h = CARD2_BASE + 4
-    content_h = title_h + divider_h + score_h + goal_h + grade_h
+    score_h = CARD2_SCORE + 10
+    goal_h = CARD2_BASE + 6
+    const_grade_h = CARD2_BASE + 6
+    content_h = title_h + divider_h + score_h + goal_h + const_grade_h
     gap, extra = divmod(block_h - content_h, 4)
 
-    # 曲名：固定两行高度（字号自适应），任何情况下高度一致
+    # 曲名：固定两行高度（字号自适应，加粗），任何情况下高度一致
     lines, size = _fit_chart_title(
         draw,
         chart.original_name or chart.name,
         right - lx,
         max_size=CARD2_BASE,
-        min_size=10,
+        min_size=CARD2_TITLE_MIN,
     )
     ty = top
     line_h = size + 2
     for line in lines:
-        draw.text((lx, ty), line, font=_font(size), fill=(255, 255, 255))
+        draw.text((lx, ty), line, font=_font(size, bold=True), fill=(255, 255, 255))
         ty += line_h
     # 分割线（曲名与分数之间）
     ty = top + title_h + gap + extra
     draw.line([(lx, ty), (right, ty)], fill=(255, 255, 255), width=divider_h)
-    # 分数：其他字体的 2 倍
+    # 分数：加粗
     ty += divider_h + gap
     draw.text(
-        (lx, ty), f"{chart.score}", font=_font(CARD2_BASE * 2), fill=(255, 255, 255)
+        (lx, ty),
+        f"{chart.score}",
+        font=_font(CARD2_SCORE, bold=True),
+        fill=(255, 255, 255),
     )
-    # GOAL：->目标分数（alpha 75）；无法推分显示 ->当前分数
+    # GOAL：->目标分数（alpha 80%，加粗）；无法推分显示 ->当前分数
     ty += score_h + gap
     if goal is not None:
         goal_text = f"->{goal}" if goal > 0 else f"->{chart.score}"
-        draw.text((lx, ty), goal_text, font=_font(CARD2_BASE), fill=CARD2_GOAL)
-    # 评级：靠右
+        draw.text(
+            (lx, ty), goal_text, font=_font(CARD2_BASE, bold=True), fill=CARD2_GOAL
+        )
+    # 定数与评级同一行（goal 下方）：定数靠左、评级靠右
     ty += goal_h + gap
+    draw.text(
+        (lx, ty),
+        f"{chart.constant:.1f}",
+        font=_font(CARD2_BASE, bold=True),
+        fill=(255, 255, 255),
+    )
     grade = get_grade(chart.score)
     draw.text(
         (right, ty),
@@ -995,7 +1008,7 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
         fill=GRADE_COLORS[grade],
         anchor="ra",
     )
-    # 曲绘下方条带（曲绘下缘到底板下缘）：左序号、右定数（条带窄，用小字号）
+    # 曲绘下方条带（窄，小字号）：左序号
     strip_cy = (cy + CARD2_COVER + y + CARD2_PLATE_H) // 2
     draw.text(
         (cx, strip_cy),
@@ -1003,13 +1016,6 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
         font=_font(CARD2_STRIP, bold=True),
         fill=(255, 255, 255),
         anchor="lm",
-    )
-    draw.text(
-        (right, strip_cy),
-        f"{chart.constant:.1f}",
-        font=_font(CARD2_STRIP),
-        fill=(255, 255, 255),
-        anchor="rm",
     )
 
 
