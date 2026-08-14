@@ -884,10 +884,10 @@ CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
 CARD2_RADIUS = 10  # 底板圆角半径
 CARD2_BASE = 30  # 普通文字字号（GOAL/定数，加粗）
 CARD2_SCORE = 44  # 分数字号（加粗；48 时 7 位满分溢出文字区）
-CARD2_TITLE_MAX = 22  # 曲名字号（原 44 的 1/2；单行，过长截断加 …）
+CARD2_TITLE_MAX = 33  # 曲名字号（原 22 的 1.5 倍；单行，过长截断加 …）
 CARD2_GOAL = (204, 204, 204)  # GOAL 行颜色：alpha 80%
 CARD2_INK_GAP = 10  # 文字行间墨迹最小间距
-CARD2_GRADE_H = 90  # 评级图高度（原 36 的 2.5 倍），放底板右下角
+CARD2_GRADE_H = 60  # 评级图高度（原 90 的 2/3），放底板右下角
 CARD2_GRADE_M = 10  # 评级图右下边距（避开上方 GOAL 行）
 CARD2_GAP = 12  # 卡片间距
 CARD2_PER_ROW = 5  # 每行卡片数
@@ -1017,9 +1017,9 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
 ) -> None:
     """新版单曲卡：2:1 不透明圆角底板，内嵌 0.9 高曲绘（四边等距）。
 
-    右侧文字区靠上排列、行间墨迹间隔 10px（无分割线、无序号）：
+    右侧文字区：曲名上边缘与曲绘齐平、行间墨迹间隔 10px（无分割线、无序号）：
     曲名（单行，过长截断加 …）/ 分数 / ->GOAL（alpha 80%）/ 定数；
-    评级图片放底板右下角（2.5 倍大小）。
+    评级图片放底板右下角（2/3 大小）。
     """
     color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
     draw.rounded_rectangle(
@@ -1047,10 +1047,10 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
             anchor="mm",
         )
 
-    # 右侧文字区：靠顶排列，下一行墨迹顶部 = 上一行墨迹底部 + CARD2_INK_GAP
+    # 右侧文字区：曲名上边缘与曲绘齐平，行间墨迹间隔 CARD2_INK_GAP
     lx = cx + CARD2_COVER + CARD2_TEXT_GAP
     right = x + CARD2_PLATE_W - CARD2_TEXT_PAD
-    ink_top = y
+    ink_top = y + CARD2_COVER_M
 
     # 曲名：单行，过长截断加 …
     title_font = _font(CARD2_TITLE_MAX, bold=True)
