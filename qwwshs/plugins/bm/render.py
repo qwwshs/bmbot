@@ -1175,8 +1175,9 @@ def render_card_new(
 ) -> bytes:
     """渲染新版查分卡，返回 PNG 字节。
 
-    头部：左上角角色头像（按存档 CharSelect 选择）+ 名字条 + Rating 徽章，
-    右上角 Berry Melody；B30/N10 网格（每行 5 首）；底部靠左等级分布表。
+    头部：左上角角色头像（按存档 CharSelect 选择）+ 名字条（玩家名居中），
+    名字条右下角 Rating 徽章，右上角 Berry Melody；B30/N10 网格（每行 5 首）；
+    底部靠左等级分布表。
     """
     card_w = CARD2_PLATE_W
     width = CARD2_PER_ROW * card_w + (CARD2_PER_ROW - 1) * CARD2_GAP + 2 * CARD2_PAD
@@ -1241,14 +1242,15 @@ def render_card_new(
         fill=(255, 255, 255),
         anchor="mm",
     )
-    # Rating 徽章：名字条下方（起点即整图起点），右上角对应名字条左上角
+    # Rating 徽章：名字条右下角（宽 = 名字条 1/5，高 = 1/2）
+    badge_x = CARD2_NAME_BAR_W - CARD2_RATING_BADGE_W
     badge_y = bar_bottom
     draw.rectangle(
-        [0, badge_y, CARD2_RATING_BADGE_W, badge_y + CARD2_RATING_BADGE_H],
+        [badge_x, badge_y, CARD2_NAME_BAR_W, badge_y + CARD2_RATING_BADGE_H],
         fill=CARD2_RATING_BADGE,
     )
     draw.text(
-        (CARD2_RATING_BADGE_W // 2, badge_y + CARD2_RATING_BADGE_H // 2),
+        (badge_x + CARD2_RATING_BADGE_W // 2, badge_y + CARD2_RATING_BADGE_H // 2),
         f"{result.rating:.2f}",
         font=_font(24, bold=True),
         fill=(255, 255, 255),
