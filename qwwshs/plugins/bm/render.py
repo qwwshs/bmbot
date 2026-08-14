@@ -531,8 +531,9 @@ CHART_DIFF_COLORS = {
     "FL": (0, 233, 168),
 }
 
-_CHART_CARD = 140  # 曲绘边长（1:1）
-_CHART_LABEL_H = 35  # 底部难度色矩形高（曲绘的 1/4）
+_CHART_CARD = 140  # 卡片总边长（曲绘 4:3 + 底部矩形 = 1:1 方形）
+_CHART_COVER_H = 105  # 曲绘高度（宽 4 : 高 3）
+_CHART_LABEL_H = _CHART_CARD - _CHART_COVER_H  # 底部难度色矩形高（补齐 1:1）
 _CHART_PER_ROW = 5  # 每行歌曲数
 _CHART_GAP = 10
 _CHART_PAD = 14
@@ -603,25 +604,30 @@ def _draw_chart_card(  # noqa: PLR0913, PLR0917
     song: str,
     diff: str,
 ) -> None:
-    """绘制单张定数表卡：1:1 曲绘 + 底部难度色矩形（曲名/难度）。"""
+    """绘制单张定数表卡：4:3 曲绘 + 底部难度色矩形，整体 1:1 方形。"""
     cover = load_cover(song, diff)
     if cover is not None:
-        cover = cover.resize((_CHART_CARD, _CHART_CARD), Image.Resampling.LANCZOS)
+        # 方形缩略图中心裁剪为 4:3 横条，再缩放到卡片曲绘区
+        cover_w, cover_h = cover.size
+        target_h = int(cover_w * 3 / 4)
+        top = (cover_h - target_h) // 2
+        cover = cover.crop((0, top, cover_w, top + target_h))
+        cover = cover.resize((_CHART_CARD, _CHART_COVER_H), Image.Resampling.LANCZOS)
         img.paste(cover, (x, y))
     else:
         draw.rectangle(
-            [x, y, x + _CHART_CARD - 1, y + _CHART_CARD - 1],
+            [x, y, x + _CHART_CARD - 1, y + _CHART_COVER_H - 1],
             fill=_CHART_PLACEHOLDER,
         )
         draw.text(
-            (x + _CHART_CARD // 2, y + _CHART_CARD // 2),
+            (x + _CHART_CARD // 2, y + _CHART_COVER_H // 2),
             "♪",
             font=_font(40),
             fill=(120, 120, 120),
             anchor="mm",
         )
     color = CHART_DIFF_COLORS.get(diff, (140, 140, 140))
-    label_y = y + _CHART_CARD
+    label_y = y + _CHART_COVER_H
     draw.rectangle(
         [x, label_y, x + _CHART_CARD - 1, label_y + _CHART_LABEL_H - 1], fill=color
     )
@@ -656,7 +662,7 @@ def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
         groups.setdefault(constant, []).append((song, diff))
     ordered = sorted(groups.items(), key=lambda item: -item[0])
 
-    card_h = _CHART_CARD + _CHART_LABEL_H + _CHART_GAP
+    card_h = _CHART_CARD + _CHART_GAP  # 卡 1:1 + 行间距
     width = (
         _CHART_PAD
         + _CHART_HEADER_W
