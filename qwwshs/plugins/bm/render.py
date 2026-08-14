@@ -911,14 +911,13 @@ def render_list_image(text: str) -> bytes:
 # ================================================================
 
 CARD2_PLATE_H = 220  # 底板高度（保持 2:1 不放大）
-CARD2_PLATE_W = 2 * CARD2_PLATE_H * 3 // 2  # 底板宽度（440 的 1.5 倍，容更长标题）
+CARD2_PLATE_W = 2 * CARD2_PLATE_H * 3 // 2 * 9 // 10  # 底板宽度（660 左缩 10% = 594）
 CARD2_COVER = int(CARD2_PLATE_H * 0.9)  # 曲绘 1:1 边长 = 底板高的 0.9
 CARD2_COVER_M = (CARD2_PLATE_H - CARD2_COVER) // 2  # 曲绘左/上/下与底板边缘等距
 CARD2_TEXT_GAP = 12  # 曲绘右缘与右侧文字区间距
 CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
 CARD2_RADIUS = 20  # 底板圆角半径
 CARD2_MATRIX_RADIUS = 18  # 等级分布框圆角半径
-CARD2_SECTION_TEX_H = 52  # B30/N10 标题底部纹路2.png 高度
 CARD2_BASE = 30  # 普通文字字号（GOAL/定数，加粗）
 CARD2_SCORE = 44  # 分数字号（加粗；48 时 7 位满分溢出文字区）
 CARD2_TITLE_MAX = 33  # 曲名字号（原 22 的 1.5 倍；单行，过长截断加 …）
@@ -1025,7 +1024,7 @@ def _draw_grade_matrix(
     box_w = matrix_w + 2 * pad
     box_bottom = y + (1 + len(GRADES)) * row_h + pad
     box_h = box_bottom - box_top
-    # 斜纹.png 背景（保持比例铺满 + 圆角）
+    # 斜纹.png 背景（保持比例铺满 + 圆角；透明度 10%，即蒙版填充 26）
     texture = _load_ui_texture("斜纹.png")
     if texture is not None:
         scale = max(box_w / texture.width, box_h / texture.height)
@@ -1037,7 +1036,9 @@ def _draw_grade_matrix(
         texture = texture.crop((tx, ty, tx + box_w, ty + box_h))
         mask = Image.new("L", (box_w, box_h), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
-            [0, 0, box_w - 1, box_h - 1], radius=CARD2_MATRIX_RADIUS, fill=255
+            [0, 0, box_w - 1, box_h - 1],
+            radius=CARD2_MATRIX_RADIUS,
+            fill=round(255 * 0.1),
         )
         img.paste(texture, (box_left, box_top), mask)
     else:
@@ -1286,7 +1287,20 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     rows: int,
     goal_factors: list[float] | None,
 ) -> int:
-    """新版分区：居中标题 + 底部纹路2.png + 网格（每行 5 首，含 GOAL 推分目标）。"""
+    """新版分区：纹路2.png 底板 + 居中标题 + 网格（每行 5 首，含 GOAL 推分目标）。"""
+    grid_h = CARD2_PLATE_H + CARD2_GAP
+    section_h = 24 + 34 + 14 + rows * grid_h
+    # 纹路2.png 作为分区底板（保持比例铺满居中裁剪，卡片画在其上）
+    texture = _load_ui_texture("纹路2.png")
+    if texture is not None:
+        scale = max(img.width / texture.width, section_h / texture.height)
+        new_w = max(1, round(texture.width * scale))
+        new_h = max(1, round(texture.height * scale))
+        texture = texture.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        tx = (new_w - img.width) // 2
+        ty = (new_h - section_h) // 2
+        texture = texture.crop((tx, ty, tx + img.width, ty + section_h))
+        img.paste(texture, (0, y), texture)
     y += 24
     draw.text(
         (img.width / 2, y),
@@ -1295,24 +1309,9 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
         fill=CARD2_TEXT,
         anchor="ma",
     )
-    # 标题底部放纹路2.png（保持比例，居中）
-    texture = _load_ui_texture("纹路2.png")
-    if texture is not None:
-        tex_h = CARD2_SECTION_TEX_H
-        tex_w = max(1, round(texture.width * tex_h / texture.height))
-        texture = texture.resize((tex_w, tex_h), Image.Resampling.LANCZOS)
-        img.paste(
-            texture,
-            (int(img.width / 2 - tex_w / 2), y + 36),
-            texture,
-        )
-        y += 36 + tex_h + 14
-    else:
-        y += 34
-        draw.line(
-            [(CARD2_PAD, y), (img.width - CARD2_PAD, y)], fill=CARD2_DIVIDER, width=2
-        )
-        y += 14
+    y += 34
+    draw.line([(CARD2_PAD, y), (img.width - CARD2_PAD, y)], fill=CARD2_DIVIDER, width=2)
+    y += 14
     card_w = CARD2_PLATE_W + CARD2_GAP
     for index, chart in enumerate(charts):
         col = index % CARD2_PER_ROW
@@ -1350,7 +1349,7 @@ def render_card_new(
     b30_rows = (len(result.b30_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
     n10_rows = (len(result.n10_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
     grid_h = CARD2_PLATE_H + CARD2_GAP
-    section_h = 24 + 36 + CARD2_SECTION_TEX_H + 14
+    section_h = 24 + 34 + 14
     matrix_h = (1 + len(GRADES)) * 44 + 2 * CARD2_MATRIX_PAD
     header_h = max(
         CARD2_AVATAR_TOP + CARD2_AVATAR,
