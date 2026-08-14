@@ -963,7 +963,6 @@ def _load_avatar(name: str | None) -> Image.Image | None:
 
 
 def _draw_grade_matrix(
-    img: Image.Image,
     draw: ImageDraw.ImageDraw,
     y: int,
     grade_counts: dict,
@@ -972,7 +971,7 @@ def _draw_grade_matrix(
     """等级分布表：字号与曲名相同（CARD2_TITLE_MAX），黑色背景无边框。
 
     ``right`` 为空时靠左（CARD2_PAD），否则整表右对齐到 ``right``；
-    等级行用 score/ 图片（水平居中于「等级」二字），F 无图仅保留行。
+    等级行用文字（等级色），F 行不显示标签。
     返回外框底边 y。
     """
     font = _font(CARD2_TITLE_MAX, bold=True)
@@ -991,7 +990,6 @@ def _draw_grade_matrix(
     )
     cy = y + 20
     draw.text((left, cy), "等级", font=font, fill=CARD2_MUTED, anchor="lm")
-    label_cx = left + int(font.getlength("等级")) // 2  # 「等级」二字中心
     for index, diff in enumerate(ALL_DIFFS):
         draw.text(
             (left + label_w + index * col_w + col_w // 2, cy),
@@ -1001,15 +999,15 @@ def _draw_grade_matrix(
             anchor="mm",
         )
     y += row_h
-    image_h = row_h - 6
     for grade in GRADES:
         cy = y + row_h // 2
-        grade_image = _load_grade_image(grade, height=image_h)
-        if grade_image is not None:
-            img.paste(
-                grade_image,
-                (label_cx - grade_image.width // 2, cy - grade_image.height // 2),
-                grade_image,
+        if grade != "F":
+            draw.text(
+                (left, cy),
+                grade,
+                font=font,
+                fill=GRADE_COLORS[grade],
+                anchor="lm",
             )
         for index, diff in enumerate(ALL_DIFFS):
             draw.text(
@@ -1316,9 +1314,7 @@ def render_card_new(
         anchor="mm",
     )
     # 等级分布：右上角（保持大小）
-    _draw_grade_matrix(
-        img, draw, CARD2_AVATAR_TOP, grade_counts, right=width - CARD2_PAD
-    )
+    _draw_grade_matrix(draw, CARD2_AVATAR_TOP, grade_counts, right=width - CARD2_PAD)
 
     y = header_h + 24
 
