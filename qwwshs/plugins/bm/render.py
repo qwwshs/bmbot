@@ -892,53 +892,79 @@ CARD2_GRADE_M = 10  # 评级图右下边距（避开上方 GOAL 行）
 CARD2_GAP = 12  # 卡片间距
 CARD2_PER_ROW = 5  # 每行卡片数
 CARD2_PAD = 30
-CARD2_BG = (20, 20, 20)
+CARD2_BG = (55, 55, 55)  # 整张查分图背景 #FF373737
 CARD2_TEXT = (240, 240, 240)
 CARD2_MUTED = (150, 150, 150)
 CARD2_DIVIDER = (70, 70, 70)
 CARD2_ACCENT = (220, 220, 220)
 
+# 头部：角色头像 + 名字条 + Rating 徽章 + Berry Melody（右上角）
+CARD2_AVATAR = 160  # 头像边长
+CARD2_AVATAR_X = CARD2_AVATAR // 4  # 头像右移 1/4
+CARD2_AVATAR_TOP = CARD2_AVATAR // 4  # 头像顶部边距
+CARD2_NAME_BAR_H = CARD2_AVATAR // 2  # 名字条高度 = 头像 1/2
+CARD2_NAME_BAR_W = CARD2_AVATAR * 4  # 名字条长度 = 头像 4 倍（x 从图片起点开始）
+CARD2_NAME_BAR = (40, 40, 40)  # 名字条颜色（图层在头像之下）
+CARD2_RATING_BADGE_W = CARD2_NAME_BAR_W // 5  # Rating 徽章宽 = 名字条 1/5
+CARD2_RATING_BADGE_H = CARD2_NAME_BAR_H // 2  # Rating 徽章高 = 名字条 1/2
+CARD2_RATING_BADGE = (255, 24, 48)  # Rating 徽章颜色 #FF1830
 
-def _draw_matrix_compact(
-    draw: ImageDraw.ImageDraw, x: int, y: int, grade_counts: dict
+
+_avatar_cache: dict[str, Image.Image | None] = {}
+
+
+def _load_avatar(name: str | None) -> Image.Image | None:
+    """加载角色头像（images/<角色名>.png），缩放到 CARD2_AVATAR。"""
+    if not name:
+        return None
+    if name not in _avatar_cache:
+        image = None
+        path = IMAGE_DIR / f"{name}.png"
+        if path.exists():
+            try:
+                with Image.open(path) as im:
+                    image = im.convert("RGBA").resize(
+                        (CARD2_AVATAR, CARD2_AVATAR), Image.Resampling.LANCZOS
+                    )
+            except OSError:
+                image = None
+        _avatar_cache[name] = image
+    return _avatar_cache[name]
+
+
+def _draw_grade_matrix_bottom(
+    draw: ImageDraw.ImageDraw, y: int, grade_counts: dict
 ) -> int:
-    """紧凑版难度 x 等级分布表（新版头部右侧）。"""
-    col_w = 64
-    diff_x = x + col_w
-    draw.text(
-        (x + col_w // 2, y),
-        "等级",
-        font=_font(18),
-        fill=CARD2_MUTED,
-        anchor="ma",
-    )
+    """等级分布表：整图最底部、靠左，字号与曲名相同（CARD2_TITLE_MAX）。"""
+    font = _font(CARD2_TITLE_MAX, bold=True)
+    label_w = 100
+    col_w = 132
+    row_h = 44
+    left = CARD2_PAD
+    cy = y + 20
+    draw.text((left, cy), "等级", font=font, fill=CARD2_MUTED, anchor="lm")
     for index, diff in enumerate(ALL_DIFFS):
         draw.text(
-            (diff_x + index * col_w + col_w // 2, y),
+            (left + label_w + index * col_w + col_w // 2, cy),
             diff,
-            font=_font(18, bold=True),
+            font=font,
             fill=CARD2_TEXT,
-            anchor="ma",
+            anchor="mm",
         )
-    y += 24
+    y += row_h
     for grade in GRADES:
-        draw.text(
-            (x + col_w // 2, y + 9),
-            grade,
-            font=_font(18, bold=True),
-            fill=GRADE_COLORS[grade],
-            anchor="ma",
-        )
+        cy = y + row_h // 2
+        draw.text((left, cy), grade, font=font, fill=GRADE_COLORS[grade], anchor="lm")
         for index, diff in enumerate(ALL_DIFFS):
             draw.text(
-                (diff_x + index * col_w + col_w // 2, y + 9),
+                (left + label_w + index * col_w + col_w // 2, cy),
                 str(grade_counts[diff][grade]),
-                font=_font(18),
+                font=font,
                 fill=CARD2_TEXT,
-                anchor="ma",
+                anchor="mm",
             )
-        y += 21
-    return y
+        y += row_h
+    return y + 16
 
 
 SCODE_DIR = Path(__file__).resolve().parent / "scode"
@@ -1145,52 +1171,99 @@ def render_card_new(
     result: RatingResult,
     grade_counts: dict[str, dict[str, int]],
     _archive_potential: object = None,
+    character: str | None = None,
 ) -> bytes:
     """渲染新版查分卡，返回 PNG 字节。
 
-    左上角标题/用户名/RATING + 右侧等级分布，B30/N10 网格（每行 5 首）。
+    头部：左上角角色头像（按存档 CharSelect 选择）+ 名字条 + Rating 徽章，
+    右上角 Berry Melody；B30/N10 网格（每行 5 首）；底部靠左等级分布表。
     """
     card_w = CARD2_PLATE_W
     width = CARD2_PER_ROW * card_w + (CARD2_PER_ROW - 1) * CARD2_GAP + 2 * CARD2_PAD
-    header_h = max(32 + 42 + 36, 24 + len(GRADES) * 21) + 24
     b30_rows = (len(result.b30_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
     n10_rows = (len(result.n10_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
     grid_h = CARD2_PLATE_H + CARD2_GAP
     section_h = 24 + 34 + 14
+    matrix_h = (1 + len(GRADES)) * 44 + 36
     height = (
-        CARD2_PAD
-        + header_h
+        CARD2_AVATAR_TOP
+        + CARD2_AVATAR
+        + 24
         + section_h
         + b30_rows * grid_h
         + section_h
         + n10_rows * grid_h
+        + 24
+        + matrix_h
         + CARD2_PAD
     )
 
     img = Image.new("RGB", (width, height), CARD2_BG)
     draw = ImageDraw.Draw(img)
-    y = CARD2_PAD
 
-    # 头部：左侧标题/用户名/RATING，右侧等级分布
-    matrix_w = 7 * 64
-    matrix_x = width - CARD2_PAD - matrix_w
-    _draw_matrix_compact(draw, matrix_x, y, grade_counts)
-    draw.text(
-        (CARD2_PAD, y), "berry melody", font=_font(22, bold=True), fill=CARD2_ACCENT
-    )
-    y += 32
+    # ---------- 头部 ----------
+    avatar = _load_avatar(character)
+    avatar_x = CARD2_AVATAR_X
+    avatar_y = CARD2_AVATAR_TOP
+    bar_top = avatar_y + (CARD2_AVATAR - CARD2_NAME_BAR_H) // 2
+    bar_bottom = bar_top + CARD2_NAME_BAR_H
+    # 名字条：x 从整图起点 0 到 4 倍头像长，纵坐标中点与头像相同，图层在头像之下
+    draw.rectangle([0, bar_top, CARD2_NAME_BAR_W, bar_bottom], fill=CARD2_NAME_BAR)
+    # 头像：左上角，右移 1/4 边长
+    if avatar is not None:
+        img.paste(avatar, (avatar_x, avatar_y), avatar)
+    else:
+        draw.rectangle(
+            [
+                avatar_x,
+                avatar_y,
+                avatar_x + CARD2_AVATAR - 1,
+                avatar_y + CARD2_AVATAR - 1,
+            ],
+            fill=(48, 48, 48),
+        )
+        draw.text(
+            (avatar_x + CARD2_AVATAR // 2, avatar_y + CARD2_AVATAR // 2),
+            "♪",
+            font=_font(64),
+            fill=(120, 120, 120),
+            anchor="mm",
+        )
+    # 玩家名：以头像横坐标中点为起点、名字条终点为终点居中
+    name_mid = avatar_x + CARD2_AVATAR // 2
     name = _ellipsize(
-        draw, player_name, _font(34, bold=True), matrix_x - CARD2_PAD - 40
+        draw, player_name, _font(36, bold=True), CARD2_NAME_BAR_W - name_mid - 16
     )
-    draw.text((CARD2_PAD, y), name, font=_font(34, bold=True), fill=CARD2_TEXT)
-    y += 42
     draw.text(
-        (CARD2_PAD, y),
-        f"RATING:{result.rating:.2f}",
-        font=_font(26, bold=True),
+        ((name_mid + CARD2_NAME_BAR_W) / 2, (bar_top + bar_bottom) / 2),
+        name,
+        font=_font(36, bold=True),
         fill=(255, 255, 255),
+        anchor="mm",
     )
-    y = CARD2_PAD + header_h
+    # Rating 徽章：名字条下方（起点即整图起点），右上角对应名字条左上角
+    badge_y = bar_bottom
+    draw.rectangle(
+        [0, badge_y, CARD2_RATING_BADGE_W, badge_y + CARD2_RATING_BADGE_H],
+        fill=CARD2_RATING_BADGE,
+    )
+    draw.text(
+        (CARD2_RATING_BADGE_W // 2, badge_y + CARD2_RATING_BADGE_H // 2),
+        f"{result.rating:.2f}",
+        font=_font(24, bold=True),
+        fill=(255, 255, 255),
+        anchor="mm",
+    )
+    # Berry Melody：右上角
+    draw.text(
+        (width - CARD2_PAD, avatar_y),
+        "Berry Melody",
+        font=_font(22, bold=True),
+        fill=CARD2_ACCENT,
+        anchor="ra",
+    )
+
+    y = avatar_y + CARD2_AVATAR + 24
 
     b30_factors = [b30_goal_factor()] * len(result.b30_charts)
     n10_factors = [n10_goal_factor(i) for i in range(len(result.n10_charts))]
@@ -1200,6 +1273,8 @@ def render_card_new(
     y = _draw_rating_section_new(
         img, draw, y, "N10", result.n10_charts, n10_rows, n10_factors
     )
+    # 等级分布：整图最底部、靠左
+    _draw_grade_matrix_bottom(draw, y + 24, grade_counts)
 
     buf = io.BytesIO()
     img.save(buf, "PNG")

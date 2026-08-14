@@ -106,7 +106,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.4.6"
+BM_VERSION = "0.5.0"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -641,7 +641,12 @@ async def handle_rating(event: MessageEvent) -> None:
         )
     else:
         img_bytes = await asyncio.to_thread(
-            render_card_new, player_name, result, grade_counts, data.get("Potential")
+            render_card_new,
+            player_name,
+            result,
+            grade_counts,
+            data.get("Potential"),
+            data.get("CharSelect"),
         )
     message: Message = MessageSegment.image(img_bytes)
     if missing:
