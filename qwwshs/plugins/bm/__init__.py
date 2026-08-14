@@ -106,7 +106,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.7.0"
+BM_VERSION = "0.7.1"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -476,6 +476,8 @@ _HELP_TEXT = (
     "   随后将导出的存档放入 txt 文件再发送（聊天文件或群文件均可）\n"
     "   · 如果系统为 iOS：复制存档到 Pages，新建空白文档，粘贴，\n"
     "     点击右上角的分享，选择纯文本，导出并发送\n"
+    "   · vivo/iQOO：将存档复制进原子笔记/备忘录，点右上角，点导出文件，\n"
+    "     导出为文本，导出成功后点分享，发到群里\n"
     "   · 内容为从 <RSAKeyValue> 开始的完整存档（FormalSave.txt）\n"
     "   · 或已解密的 JSON 文本\n"
     "/bmrating — 以图片输出你的 Rating 查分\n"
@@ -517,6 +519,8 @@ async def handle_bind(event: MessageEvent) -> None:
         "   → 将导出的存档放入 txt 文件中再发送（聊天文件或群文件均可）\n"
         "   如果系统为 iOS：复制存档到 Pages，新建空白文档，粘贴，\n"
         "   点击右上角的分享，选择纯文本，导出并发送\n"
+        "   vivo/iQOO：将存档复制进原子笔记/备忘录，点右上角，点导出文件，\n"
+        "   导出为文本，导出成功后点分享，发到群里\n"
         "（内容为从 <RSAKeyValue> 开始的完整存档，或已解密的 JSON 文本）"
     )
 
