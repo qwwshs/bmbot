@@ -49,7 +49,7 @@ from .charter import (
 from .constants import DATA_DIR, ConstantsError, get_song_constants
 from .decrypt import DecryptError, parse_account_data
 from .rating import ALL_DIFFS, compute_rating, normalize_n10_name, parse_scores
-from .render import render_card, render_chart_table
+from .render import render_card, render_chart_table, render_help_image
 from .song import (
     add_alias,
     find_cover,
@@ -101,7 +101,7 @@ _ALIAS_MAX_LEN = 30
 _CHARTER_LIST_LIMIT = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.3.0"
+BM_VERSION = "0.3.1"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -422,33 +422,41 @@ bm_group_upload = on_notice(priority=5, block=False)
 _load_bindings()
 
 
+# 帮助文本（/bmhelp 渲染为图片）
+_HELP_TEXT = (
+    "🎵 Berry Melody 查分 Bot\n"
+    "━━━━━━━━━━━━━━━━━━\n"
+    "/bmhelp — 查看本帮助\n"
+    "/bmbind — 绑定存档\n"
+    "   发送后请在 5 分钟内发送存档 txt 文件（聊天文件或群文件均可）\n"
+    "   · 内容为从 <RSAKeyValue> 开始的完整存档（FormalSave.txt）\n"
+    "   · 或已解密的 JSON 文本\n"
+    "/bmrating — 以图片输出你的 Rating 查分\n"
+    "/bmsong <曲名> — 单曲查询（支持模糊搜索）\n"
+    "/bmaddname <别名> — 为歌曲添加自定义别名（白名单）\n"
+    "/bmremovename <别名> — 删除歌曲别名（白名单）\n"
+    "/bmnamelist — 查看全部别名对应关系（白名单）\n"
+    "/bmaddtowhitelist <QQ> — 添加白名单（超管）\n"
+    "/bmremovefromwhitelist <QQ> — 移除白名单（超管）\n"
+    "/bmcharter <谱师> — 按谱师查询谱面（回复序号查看歌曲详情）\n"
+    "/bmsetuptheprimitivecharter <谱师> — 设置基元谱师名义（白名单）\n"
+    "/bmremovetheprimitivecharter <谱师> — 移除基元谱师名义（白名单）\n"
+    "/bmrelatedcharter <基元谱师> — 添加关联谱师名义（白名单）\n"
+    "/bmremoverelatedcharter <基元谱师> — 解除关联谱师名义（白名单）\n"
+    "/bmrelatedcharterlist — 查看全部谱师关联（白名单）\n"
+    "/bmchart <定数1> [定数2] [难度...] — 按定数区间生成定数表图\n"
+    "   13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
+    "/bmrandom <定数1> [定数2] [难度...] — 在定数区间内随机挑一首曲目\n"
+    "/bmbotversion — 查看 bot 版本\n"
+    "━━━━━━━━━━━━━━━━━━\n"
+    "📱 存档位置：/Android/data/com.skywaystudio.BerryMelody/files/FormalSave.txt"
+)
+
+
 @bm_help.handle()
 async def handle_help() -> None:
-    await bm_help.finish(
-        "🎵 Berry Melody 查分 Bot\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "/bmhelp — 查看本帮助\n"
-        "/bmbind — 绑定存档\n"
-        "   发送后请在 5 分钟内发送存档 txt 文件（聊天文件或群文件均可）\n"
-        "   · 内容为从 <RSAKeyValue> 开始的完整存档（FormalSave.txt）\n"
-        "   · 或已解密的 JSON 文本\n"
-        "/bmrating — 以图片输出你的 Rating 查分\n"
-        "/bmsong <曲名> — 单曲查询（支持模糊搜索）\n"
-        "/bmaddname <别名> — 为歌曲添加自定义别名（白名单）\n"
-        "/bmremovename <别名> — 删除歌曲别名（白名单）\n"
-        "/bmnamelist — 查看全部别名对应关系（白名单）\n"
-        "/bmaddtowhitelist <QQ> — 添加白名单（超管）\n"
-        "/bmremovefromwhitelist <QQ> — 移除白名单（超管）\n"
-        "/bmcharter <谱师> — 按谱师查询谱面（回复序号查看歌曲详情）\n"
-        "/bmsetuptheprimitivecharter <谱师> — 设置基元谱师名义（白名单）\n"
-        "/bmrelatedcharter <基元谱师> — 添加关联谱师名义（白名单）\n"
-        "/bmremoverelatedcharter <基元谱师> — 解除关联谱师名义（白名单）\n"
-        "/bmremovetheprimitivecharter <谱师> — 移除基元谱师名义（白名单）\n"
-        "/bmrelatedcharterlist — 查看全部谱师关联（白名单）\n"
-        "/bmbotversion — 查看 bot 版本\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "📱 存档位置：/Android/data/com.skywaystudio.BerryMelody/files/FormalSave.txt"
-    )
+    img_bytes = await asyncio.to_thread(render_help_image, _HELP_TEXT)
+    await bm_help.finish(MessageSegment.image(img_bytes))
 
 
 @bm_bind.handle()

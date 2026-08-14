@@ -681,7 +681,7 @@ def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
     img = Image.new("RGB", (width, height), _CHART_BG)
     draw = ImageDraw.Draw(img)
     y = _CHART_PAD
-    for (constant, items), band_h in zip(ordered, band_heights):
+    for index, ((constant, items), band_h) in enumerate(zip(ordered, band_heights)):
         # 最左定数表头（垂直居中）
         draw.text(
             (_CHART_PAD + _CHART_HEADER_W // 2, y + band_h // 2),
@@ -697,14 +697,79 @@ def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
             fill=_CHART_DIVIDER,
             width=1,
         )
-        for index, (song, diff) in enumerate(items):
-            col = index % _CHART_PER_ROW
-            row = index // _CHART_PER_ROW
+        for card_index, (song, diff) in enumerate(items):
+            col = card_index % _CHART_PER_ROW
+            row = card_index // _CHART_PER_ROW
             # 右移 2px 露出表头分隔线
             cx = divider_x + 2 + col * (_CHART_CARD + _CHART_GAP)
             cy = y + row * card_h
             _draw_chart_card(img, draw, cx, cy, song, diff)
         y += band_h + _CHART_BAND_GAP
+        # 相邻定数行之间的白色分割线（最后一行之后不画）
+        if index < len(ordered) - 1:
+            line_y = y - _CHART_BAND_GAP // 2
+            draw.line(
+                [(_CHART_PAD, line_y), (width - _CHART_PAD, line_y)],
+                fill=(255, 255, 255),
+                width=1,
+            )
+
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+# ================================================================
+# 帮助图（/bmhelp）
+# ================================================================
+
+_HELP_BG = (18, 18, 18)
+_HELP_PAD = 36
+_HELP_LINE_H = 40
+_HELP_TITLE = (255, 255, 255)
+_HELP_CMD = (245, 245, 245)
+_HELP_DESC = (170, 170, 170)
+_HELP_MUTED = (140, 140, 140)
+_HELP_SEP = (90, 90, 90)
+
+
+def render_help_image(text: str) -> bytes:
+    """把 /bmhelp 文本渲染为深色背景图片，返回 PNG 字节。
+
+    样式：标题白色粗体；``/`` 开头的命令行命令名白色 + 说明灰色；
+    缩进/``·`` 说明行与页脚灰色；``━━`` 分隔线深灰。
+    """
+    entries: list[tuple[str, ImageFont.FreeTypeFont, tuple[int, int, int], bool]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("━━"):
+            entries.append((line, _font(18), _HELP_SEP, False))
+        elif stripped.startswith("🎵"):
+            entries.append((line, _font(30, bold=True), _HELP_TITLE, False))
+        elif stripped.startswith("/"):
+            entries.append((line, _font(24), _HELP_CMD, True))
+        else:
+            entries.append((line, _font(22), _HELP_MUTED, False))
+
+    max_w = max(_font(24).getlength(line) for line, _, _, _ in entries)
+    width = int(max_w) + 2 * _HELP_PAD
+    height = _HELP_PAD * 2 + len(entries) * _HELP_LINE_H
+    img = Image.new("RGB", (width, height), _HELP_BG)
+    draw = ImageDraw.Draw(img)
+    y = _HELP_PAD
+    for line, font, color, is_command in entries:
+        if is_command:
+            # 命令名白色 + 描述灰色（按 "—" 分割）
+            cmd, sep, desc = line.partition("—")
+            draw.text((_HELP_PAD, y), cmd, font=font, fill=_HELP_TITLE)
+            if sep:
+                dx = font.getlength(cmd)
+                draw.text((_HELP_PAD + dx, y), sep + desc, font=font, fill=_HELP_DESC)
+        else:
+            draw.text((_HELP_PAD, y), line, font=font, fill=color)
+        y += _HELP_LINE_H
 
     buf = io.BytesIO()
     img.save(buf, "PNG")
