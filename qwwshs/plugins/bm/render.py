@@ -844,9 +844,9 @@ CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
 CARD2_RADIUS = 10  # 底板圆角半径
 CARD2_BASE = 30  # 普通文字字号（GOAL/定数，加粗）
 CARD2_SCORE = 44  # 分数字号（加粗；48 时 7 位满分溢出文字区）
-CARD2_TITLE_MAX = 44  # 曲名字号（单行，过长截断加 …）
+CARD2_TITLE_MAX = 22  # 曲名字号（原 44 的 1/2；单行，过长截断加 …）
 CARD2_GOAL = (204, 204, 204)  # GOAL 行颜色：alpha 80%
-CARD2_INK_GAP = 3  # 文字行间墨迹最小间距（尽量贴紧）
+CARD2_INK_GAP = 10  # 文字行间墨迹最小间距
 CARD2_GAP = 12  # 卡片间距
 CARD2_PER_ROW = 5  # 每行卡片数
 CARD2_PAD = 30
@@ -974,9 +974,8 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
 ) -> None:
     """新版单曲卡：2:1 不透明圆角底板，内嵌 0.9 高曲绘（四边等距）。
 
-    右侧文字区靠上排列且行间按墨迹贴紧（无分割线、无序号）：
-    曲名（单行，过长截断加 …）/ 分数 / ->GOAL（alpha 80%）/
-    定数 + 评级（图片优先，缺图回退文字）。
+    右侧文字区靠上排列、行间墨迹间隔 10px（无分割线、无序号）：
+    曲名（单行，过长截断加 …）/ 分数 / ->GOAL（alpha 80%）/ 定数 + 评级图片。
     """
     color = CHART_DIFF_COLORS.get(chart.diff, (140, 140, 140))
     draw.rounded_rectangle(
@@ -1041,7 +1040,7 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
         )
         ink_top += g_bottom - g_top + CARD2_INK_GAP
 
-    # 定数（左）+ 评级（右；图片优先，缺图回退文字）
+    # 定数（左）+ 评级（右；只用 scode/ 图片，无图不画）
     const_text = f"{chart.constant:.1f}"
     c_top, c_bottom = _text_ink(const_text, CARD2_BASE, bold=True)
     draw.text(
@@ -1050,23 +1049,13 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
         font=_font(CARD2_BASE, bold=True),
         fill=(255, 255, 255),
     )
-    grade = get_grade(chart.score)
-    grade_image = _load_grade_image(grade)
+    grade_image = _load_grade_image(get_grade(chart.score))
     if grade_image is not None:
         row_cy = ink_top - c_top + (c_bottom - c_top) // 2  # 本行墨迹中心
         img.paste(
             grade_image,
             (right - grade_image.width, row_cy - grade_image.height // 2),
             grade_image,
-        )
-    else:
-        g_top, _ = _text_ink(grade, CARD2_BASE, bold=True)
-        draw.text(
-            (right, ink_top - g_top),
-            grade,
-            font=_font(CARD2_BASE, bold=True),
-            fill=GRADE_COLORS[grade],
-            anchor="ra",
         )
 
 
