@@ -645,6 +645,7 @@ async def handle_rating(event: MessageEvent) -> None:
     result.missing = missing
     player_name = binding.get("name") or str(data.get("AccountName") or "未知玩家")
     style = _rating_styles.get(qq, "new")
+    await bm_rating.send("⏳ 生成中，请稍候…")
     if style == "old":
         img_bytes = await asyncio.to_thread(
             render_card, player_name, result, grade_counts, data.get("Potential")
