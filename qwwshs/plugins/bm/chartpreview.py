@@ -62,15 +62,16 @@ SKIN_SETS: dict[str, dict[str, str]] = {
         "Drag": "Dr3_Tap.png",
         "Hold": "Dr3_Hold.png",
     },
-    # 以下皮肤按材质引用共用基础素材（tap/drag/hold 系列）
+    # 以下皮肤按材质 _MainTex 的 PathID 从 data.unity3d 提取的真实纹理
+    # （同名纹理每个皮肤不同图集，如 "drag" 有 258x29/560x44/1780x304/1041x127 四版）
     "Phigros": {
         "Tap": "Berry_Tap.png",
-        "Drag": "Berry_Drag.png",
-        "Hold": "Berry_Hold.png",
+        "Drag": "Phi_Drag.png",
+        "Hold": "Phi_Hold.png",
     },
     "Lanota": {
         "Tap": "Berry_Tap.png",
-        "Drag": "Berry_Drag.png",
+        "Drag": "Lanota_Drag.png",
         "Hold": "Lanota_Hold.png",
     },
     "qqx": {
@@ -80,7 +81,7 @@ SKIN_SETS: dict[str, dict[str, str]] = {
     },
     "Ryceam": {
         "Tap": "Berry_Tap.png",
-        "Drag": "Berry_Drag.png",
+        "Drag": "Ryceam_Drag.png",
         "Hold": "Ryceam_Hold.png",
     },
     "Evo": {
@@ -206,15 +207,19 @@ def parse_chart(path: Path) -> ChartData:
     if meta.get("Charter"):
         chart.charter = meta["Charter"]
 
-    bpm_changes = _parse_bpm_changes(sections.get("speed", []))
+    changes_raw, mults, moves, stops = _parse_speed_section(
+        sections.get("speed", [])
+    )
     # 过滤 0/负 BPM（防除零），同拍去重保留最后一条
     changes = sorted(
-        (beat, bpm) for beat, bpm in dict(bpm_changes).items() if bpm > 0
+        (beat, bpm) for beat, bpm in dict(changes_raw).items() if bpm > 0
     )
     try:
         default_bpm = float(info.get("BpmText") or _DEFAULT_BPM)
     except ValueError:
         default_bpm = _DEFAULT_BPM
+    # pos 空间分段点（黑线早期谱无 para 标记，坐标为 pos = ∫速度x倍率 db）
+    pos_breaks = _build_pos_breaks(moves, mults, stops)
 
     raw_notes = _parse_notes(sections.get("note", []))
     chart.notes = [
@@ -225,7 +230,7 @@ def parse_chart(path: Path) -> ChartData:
         for note in raw_notes
     ]
     chart.black_lines = _parse_black_lines(
-        sections.get("anim", []), changes, default_bpm
+        sections.get("anim", []), changes, default_bpm, pos_breaks
     )
     chart.duration = max(
         (point[0] for note in chart.notes for point in note.points), default=0.0
@@ -258,13 +263,95 @@ def _find_note_skin(lines: list[str]) -> str:
     return ""
 
 
-def _parse_bpm_changes(lines: list[str]) -> list[tuple[float, float]]:
-    out: list[tuple[float, float]] = []
-    for stmt in "\n".join(lines).split(";"):
-        match = re.match(r"BpmChange:\s*([\d.]+)\s*,\s*([\d.]+)", stmt.strip())
+def _parse_speed_section(
+    lines: list[str],
+) -> tuple[
+    list[tuple[float, float]],
+    list[tuple[float, float]],
+    list[tuple[float, float]],
+    list[float],
+]:
+    """解析 #speed 段：BpmChange(拍,bpm,倍率) / BpmMove(拍,速度) / BpmStop(拍)。
+
+    返回 (changes, mults, moves, stops)。
+    """
+    changes: list[tuple[float, float]] = []
+    mults: list[tuple[float, float]] = []
+    moves: list[tuple[float, float]] = []
+    stops: list[float] = []
+    for raw_stmt in "\n".join(lines).split(";"):
+        stmt = raw_stmt.strip()
+        match = re.match(
+            r"BpmChange:\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*(-?[\d.]+))?", stmt
+        )
         if match:
-            out.append((float(match.group(1)), float(match.group(2))))
-    return out
+            beat = float(match.group(1))
+            changes.append((beat, float(match.group(2))))
+            mults.append((beat, float(match.group(3) or 1.0)))
+            continue
+        match = re.match(r"BpmMove:\s*([\d.]+)\s*,\s*(-?[\d.]+)", stmt)
+        if match:
+            moves.append((float(match.group(1)), float(match.group(2))))
+            continue
+        match = re.match(r"BpmStop:\s*([\d.]+)", stmt)
+        if match:
+            stops.append(float(match.group(1)))
+    return changes, mults, moves, stops
+
+
+# pos 空间基础速度（无 BpmMove 时速度为 1，pos 与拍数一致）
+_POS_BASE_SPEED = 1.0
+
+
+def _build_pos_breaks(
+    moves: list[tuple[float, float]],
+    mults: list[tuple[float, float]],
+    stops: list[float],
+) -> list[tuple[float, float]]:
+    """构建 pos(beat) 分段点 (beat, pos)。
+
+    pos = ∫ BpmMove速度 x BpmChange倍率 db；BpmStop 段 pos 冻结（倍率置 0）。
+    """
+    events: list[tuple[float, int, float]] = []
+    for beat, speed in moves:
+        events.append((beat, 0, speed))
+    for beat, mult in mults:
+        events.append((beat, 1, mult))
+    events.extend((beat, 2, 0.0) for beat in stops)
+    events.sort(key=lambda e: (e[0], e[1]))
+    breaks: list[tuple[float, float]] = [(0.0, 0.0)]
+    prev_beat, move_speed, mult = 0.0, _POS_BASE_SPEED, 1.0
+    for beat, kind, value in events:
+        pos = breaks[-1][1] + (beat - prev_beat) * move_speed * mult
+        breaks.append((beat, pos))
+        prev_beat = beat
+        if kind == 0:
+            move_speed = value
+        elif kind == 1:
+            mult = value
+        else:
+            mult = 0.0  # BpmStop：pos 冻结
+    return breaks
+
+
+def _pos_to_beat(pos: float, breaks: list[tuple[float, float]]) -> float:
+    """pos → beat（分段线性逆函数，支持负速度段）。"""
+    if not breaks:
+        return pos
+    for i in range(len(breaks) - 1):
+        b0, p0 = breaks[i]
+        b1, p1 = breaks[i + 1]
+        low, high = (p0, p1) if p0 <= p1 else (p1, p0)
+        if p1 != p0 and low <= pos <= high:
+            return b0 + (b1 - b0) * (pos - p0) / (p1 - p0)
+    # 超出末尾：按最后一段速度外推
+    if len(breaks) >= _MIN_POLYLINE_POINTS:
+        b0, p0 = breaks[-2]
+        b1, p1 = breaks[-1]
+        speed = (p1 - p0) / (b1 - b0) if b1 != b0 else _POS_BASE_SPEED
+        if speed:
+            return b1 + (pos - p1) / speed
+    return breaks[-1][0] + pos - breaks[-1][1]
 
 
 def _parse_notes(lines: list[str]) -> list[Note]:
@@ -298,21 +385,28 @@ def _parse_notes(lines: list[str]) -> list[Note]:
 
 
 def _parse_black_lines(
-    lines: list[str], bpm_changes: list[tuple[float, float]], default_bpm: float
+    lines: list[str],
+    bpm_changes: list[tuple[float, float]],
+    default_bpm: float,
+    pos_breaks: list[tuple[float, float]],
 ) -> list[list[tuple[float, float]]]:
     """解析 #anim 里的 BlackLine：返回 (时间秒, x) 折线列表。
 
     简单形式 ``BlackLine: 拍, x, ...;`` 直接取点对；
     块形式 ``BlackLine::[ $... ];`` 按公式求值采样（Freq 个点）。
-    两者都可能带 ``:{ ... }`` 属性块，先剥离。
+    带 ``IsParaLine`` 标记的为 para 空间（坐标即拍数）；
+    早期谱无标记的为 pos 空间（坐标为速度/倍率积分后的 pos，取逆函数换算）。
     """
     out: list[list[tuple[float, float]]] = []
     for raw_stmt in "\n".join(lines).split(";"):
         stmt = raw_stmt.strip()
         if not stmt.startswith("BlackLine"):
             continue
+        is_para = "IsParaLine" in stmt
         if stmt.startswith("BlackLine::["):
-            curve = _eval_black_line_block(stmt, bpm_changes, default_bpm)
+            curve = _eval_black_line_block(
+                stmt, bpm_changes, default_bpm, pos_breaks, is_para=is_para
+            )
             if curve:
                 out.append(curve)
             continue
@@ -330,6 +424,8 @@ def _parse_black_lines(
                 "BlackLine::[" + stmt[block_start.end() :],
                 bpm_changes,
                 default_bpm,
+                pos_breaks,
+                is_para=is_para,
             )
             if curve and "Move_Y" in stmt[block_start.end() :]:
                 out.append(curve)
@@ -339,9 +435,13 @@ def _parse_black_lines(
         points = [(float(match.group(1)), float(match.group(2)))]
         rest = [float(v) for v in body.split(",") if v.strip()]
         points.extend((rest[i], rest[i + 1]) for i in range(0, len(rest) - 1, 2))
-        out.append(
-            [(_beat_to_time(b, bpm_changes, default_bpm), x) for b, x in points]
-        )
+        converted: list[tuple[float, float]] = []
+        for point in points:
+            beat, x = point
+            if not is_para:
+                beat = _pos_to_beat(beat, pos_breaks)
+            converted.append((_beat_to_time(beat, bpm_changes, default_bpm), x))
+        out.append(converted)
     return out
 
 
@@ -649,12 +749,17 @@ _BLOCK_STMT_RE = re.compile(r"\$?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*(.*))?$")
 
 
 def _eval_black_line_block(
-    stmt: str, bpm_changes: list[tuple[float, float]], default_bpm: float
+    stmt: str,
+    bpm_changes: list[tuple[float, float]],
+    default_bpm: float,
+    pos_breaks: list[tuple[float, float]],
+    *,
+    is_para: bool,
 ) -> list[tuple[float, float]] | None:
     """求值 BlackLine::[ ... ] 公式块，返回 (时间秒, x) 折线。
 
-    y 为相对 Move_Y 的拍数偏移，x 为相对 Move_X 的横向偏移；
-    ``$ Mirror`` 时 x 取反。
+    y 为相对 Move_Y 的拍数偏移（para）或 pos 偏移（pos，取逆函数）；
+    x 为相对 Move_X 的横向偏移；``$ Mirror`` 时 x 取反。
     """
     start = stmt.find("[")
     end = stmt.find("]", start + 1)
@@ -675,15 +780,14 @@ def _eval_black_line_block(
 
     points: list[tuple[float, float]] = []
     for i in range(sample_count + 1):
-        point = _sample_black_line(
-            compiled,
-            i / sample_count,
-            freq,
-            bpm_changes,
-            default_bpm,
-        )
+        point = _sample_black_line(compiled, i / sample_count, freq)
         if point is not None:
-            points.append(point)
+            beat, x = point
+            if not is_para:
+                beat = _pos_to_beat(beat, pos_breaks)
+            points.append(
+                (max(0.0, _beat_to_time(beat, bpm_changes, default_bpm)), x)
+            )
     return points if len(points) >= _MIN_POLYLINE_POINTS else None
 
 
@@ -715,10 +819,8 @@ def _sample_black_line(
     compiled: list[tuple[str, _Node | None]],
     delta: float,
     freq: float,
-    bpm_changes: list[tuple[float, float]],
-    default_bpm: float,
 ) -> tuple[float, float] | None:
-    """求值一个采样点的 (时间秒, x)。"""
+    """求值一个采样点的 (拍/pos, x)。"""
     env = {"delta": delta, "Freq": freq, "Move_X": 0.0, "Move_Y": 0.0}
     mirror = False
     try:
@@ -734,7 +836,7 @@ def _sample_black_line(
     x = env.get("Move_X", 0.0) + env.get("x", 0.0)
     if mirror:
         x = -x
-    return max(0.0, _beat_to_time(beat, bpm_changes, default_bpm)), x
+    return beat, x
 
 
 def _beat_to_time(
