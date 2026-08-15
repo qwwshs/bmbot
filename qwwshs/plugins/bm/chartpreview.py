@@ -1021,36 +1021,28 @@ def _draw_note_bar(
 def _draw_hold(
     draw: ImageDraw.ImageDraw, note: Note, columns: int
 ) -> None:
-    """Slide（Hold）渲染：素材主色连续粗线，按分钟段分组，端部画圆帽。
+    """Slide（Hold）渲染：纯色块逻辑——中心路径左右各扩半宽画填充多边形。
 
-    素材是平条（纯色），直接用颜色画粗线保证路径连续无断点。
+    颜色取 Hold 素材主色（素材是平条，直接用色块渲染），缺失回退红。
     """
     color = _hold_color()
+    half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 4
     groups: dict[int, list[tuple[float, float, float]]] = {}
     for t, x1, width in note.points:
         col = _note_col(t, columns)
-        groups.setdefault(col, []).append((_note_x(x1, col), _note_y(t, col), width))
+        px = _note_x(x1, col)
+        half = width * half_scale
+        groups.setdefault(col, []).append((px, _note_y(t, col), half))
     for pts in groups.values():
         if len(pts) == 1:
-            px, py, width = pts[0]
-            radius = _note_pixel_width(width) / 2
+            px, py, half = pts[0]
             draw.ellipse(
-                (px - radius, py - radius, px + radius, py + radius), fill=color
+                (px - half, py - half, px + half, py + half), fill=color
             )
             continue
-        for start, end in zip(pts, pts[1:]):
-            width = (start[2] + end[2]) / 2
-            draw.line(
-                [(start[0], start[1]), (end[0], end[1])],
-                fill=color,
-                width=round(_note_pixel_width(width)),
-            )
-        # 端部圆帽
-        for px, py, width in (pts[0], pts[-1]):
-            radius = _note_pixel_width(width) / 2
-            draw.ellipse(
-                (px - radius, py - radius, px + radius, py + radius), fill=color
-            )
+        lefts = [(px - half, py) for px, py, half in pts]
+        rights = [(px + half, py) for px, py, half in reversed(pts)]
+        draw.polygon(lefts + rights, fill=color)
 
 
 def _note_col(t: float, columns: int) -> int:
