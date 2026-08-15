@@ -127,6 +127,8 @@ _song_pending: dict[str, dict] = {}
 _chart_pending: dict[str, dict] = {}
 # QQ 号 -> 音符皮肤名（/bmskin 切换，缺省 DEFAULT_SKIN；谱面指定皮肤时优先）
 _chart_skins: dict[str, str] = {}
+# QQ 号 -> 过期时间（bmskin 列表后的序号/皮肤名选择）
+_skin_pending: dict[str, float] = {}
 # QQ 号 -> {alias: 别名, names: 搜索结果, expire: 过期时间}（bmaddname 流程）
 _addname_pending: dict[str, dict] = {}
 # QQ 号 -> {alias: 别名, names: 搜索结果, expire: 过期时间}（bmremovename 流程）
@@ -469,6 +471,7 @@ bm_charter_unset = on_command("bmremovetheprimitivecharter", priority=5, block=T
 bm_chart = on_command("bmchartlist", priority=5, block=True)
 bm_chart_preview = on_command("bmchart", priority=5, block=True)
 bm_skin = on_command("bmskin", priority=5, block=True)
+bm_skin_pick = on_message(priority=10, block=False)
 bm_random = on_command("bmrandom", priority=5, block=True)
 bm_rating_style = on_command("bmratingstyle", priority=5, block=True)
 bm_file_watch = on_message(priority=10, block=False)
@@ -1573,26 +1576,53 @@ async def handle_skin(event: MessageEvent, arg: Message = CommandArg()) -> None:
     names = list(SKIN_SETS)
     current = _chart_skins.get(qq, DEFAULT_SKIN)
     if not text:
+        _skin_pending[qq] = time.monotonic() + _SONG_PICK_TTL
         lines = [f"🎨 音符皮肤（当前：{current}）"]
         lines.extend(
             f"{i + 1}. {name}{' ←' if name == current else ''}"
             for i, name in enumerate(names)
         )
-        lines.append("回复序号或直接发送皮肤名切换\n谱面指定皮肤时自动优先")
+        lines.append(f"回复序号或直接发送皮肤名切换（{_SONG_PICK_TTL:.0f} 秒内有效）")
         img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
         await bm_skin.finish(MessageSegment.image(img_bytes))
-    if text.isdigit():
-        index = int(text)
-        if index < 1 or index > len(names):
-            await bm_skin.finish(f"❌ 序号无效（1-{len(names)}）")
-        name = names[index - 1]
-    else:
-        matched = [n for n in names if n.lower() == text.lower()]
-        if not matched:
-            await bm_skin.finish(f"❌ 未找到皮肤「{text}」，可用：{'/'.join(names)}")
-        name = matched[0]
+    _skin_pending.pop(qq, None)
+    name = _resolve_skin_choice(text, names)
+    if name is None:
+        await bm_skin.finish(f"❌ 未找到皮肤「{text}」，可用：{'/'.join(names)}")
     _chart_skins[qq] = name
     await bm_skin.finish(f"✅ 已切换音符皮肤为 {name}")
+
+
+def _resolve_skin_choice(text: str, names: list[str]) -> str | None:
+    """解析皮肤选择：数字序号或皮肤名（大小写不敏感）。"""
+    if text.isdigit():
+        index = int(text)
+        if 1 <= index <= len(names):
+            return names[index - 1]
+        return None
+    for name in names:
+        if name.lower() == text.lower():
+            return name
+    return None
+
+
+@bm_skin_pick.handle()
+async def handle_skin_pick(event: MessageEvent) -> None:
+    """bmskin 列表后的序号/皮肤名选择（回复纯文本）。"""
+    qq = str(event.user_id)
+    expire = _skin_pending.get(qq)
+    if expire is None:
+        return
+    if time.monotonic() > expire:
+        _skin_pending.pop(qq, None)
+        return
+    text = event.get_plaintext().strip()
+    name = _resolve_skin_choice(text, list(SKIN_SETS)) if text else None
+    if name is None:
+        return  # 无关消息不打扰
+    _skin_pending.pop(qq, None)
+    _chart_skins[qq] = name
+    await bm_skin_pick.send(f"✅ 已切换音符皮肤为 {name}")
 
 
 @bm_chart_pick.handle()
