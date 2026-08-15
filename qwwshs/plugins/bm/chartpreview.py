@@ -136,8 +136,6 @@ _NOTE_THICKNESS = 7
 _MIN_NOTE_PIXELS = 2
 # 素材主色统计时视为不透明的 alpha 下限
 _ALPHA_THRESHOLD = 100
-# Tap/Drag 素材渲染的固定高度（像素，宽度可拉伸、不保比例）
-_NOTE_FIXED_HEIGHT = 8
 # Slide（Hold）透明度（0-255，191 = 75%）
 _HOLD_ALPHA = round(255 * 0.75)
 
@@ -1197,7 +1195,7 @@ def _draw_note_image(
     columns: int,
     skin: str = DEFAULT_SKIN,
 ) -> bool:
-    """用指定皮肤素材画 Tap/Drag：宽度拉伸到音符宽度，高度固定。
+    """用指定皮肤素材画 Tap/Drag：宽度拉伸到音符宽度，高度按素材比例。
 
     Tech 皮肤的 Drag（wipe）染黄色，其余皮肤保持素材本色。
     """
@@ -1215,9 +1213,9 @@ def _draw_note_image(
     target_w = round(_note_pixel_width(width))
     if target_w <= _MIN_NOTE_PIXELS:
         return False
-    resized = note_image.resize(
-        (target_w, _NOTE_FIXED_HEIGHT), Image.Resampling.LANCZOS
-    )
+    # 高度按素材宽高比（游戏九宫格上下 border 为 0，高度全拉伸）
+    target_h = max(1, round(target_w * note_image.height / note_image.width))
+    resized = note_image.resize((target_w, target_h), Image.Resampling.LANCZOS)
     image.paste(resized, (px - resized.width // 2, py - resized.height // 2), resized)
     return True
 
