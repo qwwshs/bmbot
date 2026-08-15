@@ -31,6 +31,11 @@ NOTE_COLORS = {
 _NOTE_TYPES = tuple(NOTE_COLORS)
 # Hold 每段点数（拍, x, y）
 _NOTE_SEGMENT = 3
+# 黑线：深色背景上用白色细线表示（x 范围 [-3, 3]，超出轨道部分裁掉）
+_BLACK_LINE_COLOR = (255, 255, 255)
+_BLACK_LINE_WIDTH = 2
+# 折线至少需要的点数
+_MIN_POLYLINE_POINTS = 2
 
 # 布局：每 30 秒一段，段宽 320px、高 2000px
 _SEGMENT_SECONDS = 30.0
@@ -72,6 +77,8 @@ class ChartData:
     charter: str = ""
     level: str = ""
     notes: list[Note] = field(default_factory=list)
+    # 黑线（#anim 的 BlackLine）：每条为 (时间秒, x) 折线
+    black_lines: list[list[tuple[float, float]]] = field(default_factory=list)
     duration: float = 0.0  # 秒
 
 
@@ -111,6 +118,10 @@ def parse_chart(path: Path) -> ChartData:
             [(_beat_to_time(t, changes, default_bpm), x, y) for t, x, y in note.points],
         )
         for note in raw_notes
+    ]
+    chart.black_lines = [
+        [(_beat_to_time(t, changes, default_bpm), x) for t, x in line]
+        for line in _parse_black_lines(sections.get("anim", []))
     ]
     chart.duration = max(
         (point[0] for note in chart.notes for point in note.points), default=0.0
@@ -163,6 +174,21 @@ def _parse_notes(lines: list[str]) -> list[Note]:
         elif len(values) >= _NOTE_SEGMENT:
             notes.append(Note(kind, [(values[0], values[1], values[2])]))
     return notes
+
+
+def _parse_black_lines(lines: list[str]) -> list[list[tuple[float, float]]]:
+    """解析 #anim 里的 BlackLine 折线（拍, x 点对，不含 ::[ 动画块形式）。"""
+    out: list[list[tuple[float, float]]] = []
+    for raw_stmt in "\n".join(lines).split(";"):
+        stmt = raw_stmt.strip()
+        match = re.match(r"BlackLine:\s*([\d.]+)\s*,\s*(-?[\d.]+)(.*)", stmt)
+        if not match:
+            continue
+        points = [(float(match.group(1)), float(match.group(2)))]
+        rest = [float(v) for v in match.group(3).split(",") if v.strip()]
+        points.extend((rest[i], rest[i + 1]) for i in range(0, len(rest) - 1, 2))
+        out.append(points)
+    return out
 
 
 def _beat_to_time(
@@ -224,6 +250,7 @@ def render_chart_preview(chart: ChartData, display_name: str) -> bytes:
 
     _draw_title(draw, width, chart, display_name)
     _draw_separators(draw, columns, height)
+    _draw_black_lines(draw, chart.black_lines, columns)
     _draw_notes(draw, chart.notes, columns)
 
     buffer = io.BytesIO()
@@ -262,6 +289,49 @@ def _draw_separators(draw: ImageDraw.ImageDraw, columns: int, height: int) -> No
         right = left + _COLUMN_WIDTH
         draw.line((left, _TITLE_HEIGHT, left, height - 8), fill=_GUIDE_COLOR)
         draw.line((right, _TITLE_HEIGHT, right, height - 8), fill=_GUIDE_COLOR)
+
+
+def _draw_black_lines(
+    draw: ImageDraw.ImageDraw,
+    black_lines: list[list[tuple[float, float]]],
+    columns: int,
+) -> None:
+    """黑线折线：按分钟段分组，x 裁到轨道范围内。"""
+    for line in black_lines:
+        for group in _group_by_column(line, columns):
+            points = [_black_line_point(t, x, columns) for t, x in group]
+            if len(points) >= _MIN_POLYLINE_POINTS:
+                draw.line(
+                    points,
+                    fill=_BLACK_LINE_COLOR,
+                    width=_BLACK_LINE_WIDTH,
+                    joint="curve",
+                )
+
+
+def _black_line_point(t: float, x: float, columns: int) -> tuple[float, float]:
+    """黑线点坐标 → 像素（x 裁到轨道 [-1, 1] 内）。"""
+    col = _note_col(t, columns)
+    return _note_x(max(-1.0, min(1.0, x)), col), _note_y(t, col)
+
+
+def _group_by_column(
+    points: list[tuple[float, float]], columns: int
+) -> list[list[tuple[float, float]]]:
+    """把 (时间, x) 点按分钟段分组（跨段折线拆开）。"""
+    groups: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = []
+    last_col = -1
+    for t, x in points:
+        col = _note_col(t, columns)
+        if current and col != last_col:
+            groups.append(current)
+            current = []
+        current.append((t, x))
+        last_col = col
+    if current:
+        groups.append(current)
+    return groups
 
 
 def _draw_notes(
