@@ -4,7 +4,8 @@
 把音符按 beat→时间换算后铺到分栏预览图上：
 
 - 每 30 秒拆成一栏，从左到右排列，白色竖线分隔
-- Tap 用蓝色、Drag 用黄色、Hold（滑条）用红色
+- Tap/Drag/Hold 用 note/ 素材渲染（Drag 染黄，Hold 素材主色连续粗线；
+  素材缺失回退蓝/黄/红）
 - 仅用 ``#speed`` 的 BpmChange 做 beat→时间换算（忽略第三位），
   流速（BpmMove/InitialSpeed）等属性不参与
 """
@@ -40,21 +41,6 @@ NOTE_COLORS = {
 }
 _NOTE_TYPES = tuple(NOTE_COLORS)
 
-_note_image_cache: dict[str, Image.Image | None] = {}
-
-
-def _note_image(kind: str) -> Image.Image | None:
-    """加载 note/ 下的音符素材（White_Tap/Drag/Hold.png），带缓存。"""
-    if kind not in _note_image_cache:
-        image = None
-        path = NOTE_DIR / f"White_{kind}.png"
-        if path.exists():
-            try:
-                image = Image.open(path).convert("RGBA")
-            except OSError:
-                image = None
-        _note_image_cache[kind] = image
-    return _note_image_cache[kind]
 # Hold 每段点数（拍, x, y）
 _NOTE_SEGMENT = 3
 # 黑线：深色背景上用白色细线表示（x 范围 [-3, 3]，超出轨道部分裁掉）
@@ -83,6 +69,8 @@ _GUIDE_COLOR = (62, 66, 76)
 _NOTE_THICKNESS = 7
 # 音符素材/段长小于该像素数时不绘制
 _MIN_NOTE_PIXELS = 2
+# 素材主色统计时视为不透明的 alpha 下限
+_ALPHA_THRESHOLD = 100
 
 _DEFAULT_BPM = 120.0
 # 结尾超出分钟分界的容差（秒），超出视为需要新一栏
@@ -906,17 +894,69 @@ def _draw_notes(
     """音符绘制：note/ 素材优先，缺失时回退彩色条。"""
     for note in notes:
         if note.kind == "Hold":
-            if not _draw_hold_image(image, note, columns):
-                _draw_hold(draw, note, NOTE_COLORS["Hold"], columns)
+            _draw_hold(draw, note, columns)
         else:
             for point in note.points:
                 if not _draw_note_image(image, note.kind, point, columns):
                     _draw_note_bar(draw, point, NOTE_COLORS[note.kind], columns)
 
 
-def _note_pixel_width(width: float) -> int:
+def _note_pixel_width(width: float) -> float:
     """音符宽度值（x2）→ 像素宽。"""
-    return max(1, int(width * (_COLUMN_WIDTH - 2 * _LANE_PAD) / 2))
+    return max(1.0, width * (_COLUMN_WIDTH - 2 * _LANE_PAD) / 2)
+
+
+_note_image_cache: dict[str, Image.Image | None] = {}
+
+
+def _note_image(kind: str) -> Image.Image | None:
+    """加载 note/ 下的音符素材（White_Tap/Drag/Hold.png），带缓存。"""
+    if kind not in _note_image_cache:
+        image = None
+        path = NOTE_DIR / f"White_{kind}.png"
+        if path.exists():
+            try:
+                image = Image.open(path).convert("RGBA")
+            except OSError:
+                image = None
+        _note_image_cache[kind] = image
+    return _note_image_cache[kind]
+
+
+_tinted_cache: dict[tuple[str, tuple[int, int, int]], Image.Image] = {}
+
+
+def _tinted_note_image(kind: str, color: tuple[int, int, int]) -> Image.Image | None:
+    """按目标色染色的素材（逐通道乘 color/255），带缓存。"""
+    key = (kind, color)
+    if key not in _tinted_cache:
+        base = _note_image(kind)
+        if base is None:
+            return None
+        r_ch, g_ch, b_ch, a_ch = base.split()
+        r_ch = r_ch.point(lambda v, f=color[0] / 255: int(v * f))
+        g_ch = g_ch.point(lambda v, f=color[1] / 255: int(v * f))
+        b_ch = b_ch.point(lambda v, f=color[2] / 255: int(v * f))
+        _tinted_cache[key] = Image.merge("RGBA", (r_ch, g_ch, b_ch, a_ch))
+    return _tinted_cache[key]
+
+
+_hold_color_cache: dict[str, tuple[int, int, int] | None] = {}
+
+
+def _hold_color() -> tuple[int, int, int]:
+    """Hold 素材主色（素材是平条，直接用色画连续粗线），缺失回退红。"""
+    if "color" not in _hold_color_cache:
+        color: tuple[int, int, int] | None = None
+        image = _note_image("Hold")
+        if image is not None:
+            pixels = [p[:3] for p in image.getdata() if p[3] > _ALPHA_THRESHOLD]
+            if pixels:
+                color = tuple(
+                    sum(c[i] for c in pixels) // len(pixels) for i in range(3)
+                )
+        _hold_color_cache["color"] = color
+    return _hold_color_cache["color"] or NOTE_COLORS["Hold"]
 
 
 def _draw_note_image(
@@ -925,10 +965,17 @@ def _draw_note_image(
     point: tuple[float, float, float],
     columns: int,
 ) -> bool:
-    """用 note/ 素材画 Tap/Drag：按音符宽度等比缩放后居中粘贴。"""
+    """用 note/ 素材画 Tap/Drag：按音符宽度等比缩放（高度 1/3），居中粘贴。
+
+    Drag（wipe）染黄色。
+    """
     note_image = _note_image(kind)
     if note_image is None:
         return False
+    if kind == "Drag":
+        tinted = _tinted_note_image(kind, NOTE_COLORS["Drag"])
+        if tinted is not None:
+            note_image = tinted
     t, x1, width = point
     col = _note_col(t, columns)
     px = round(_note_x(x1, col))
@@ -936,61 +983,13 @@ def _draw_note_image(
     target_w = _note_pixel_width(width)
     if target_w <= _MIN_NOTE_PIXELS:
         return False
-    target_h = max(1, round(target_w * note_image.height / note_image.width))
-    resized = note_image.resize((target_w, target_h), Image.Resampling.LANCZOS)
-    image.paste(resized, (px - target_w // 2, py - target_h // 2), resized)
-    return True
-
-
-def _draw_hold_image(
-    image: Image.Image, note: Note, columns: int
-) -> bool:
-    """用 note/ 素材画 Hold：每段拉伸为（段长 x 音符宽）并旋转对齐路径。"""
-    hold_image = _note_image("Hold")
-    if hold_image is None:
-        return False
-    groups: dict[int, list[tuple[float, float, float]]] = {}
-    for t, x1, width in note.points:
-        col = _note_col(t, columns)
-        groups.setdefault(col, []).append((_note_x(x1, col), _note_y(t, col), width))
-    for pts in groups.values():
-        if len(pts) == 1:
-            px, py, width = pts[0]
-            _paste_hold_piece(image, hold_image, (px, py), (px, py), width)
-            continue
-        for start, end in zip(pts, pts[1:]):
-            _paste_hold_piece(
-                image,
-                hold_image,
-                (start[0], start[1]),
-                (end[0], end[1]),
-                (start[2] + end[2]) / 2,
-            )
-    return True
-
-
-def _paste_hold_piece(
-    image: Image.Image,
-    hold_image: Image.Image,
-    start: tuple[float, float],
-    end: tuple[float, float],
-    width: float,
-) -> None:
-    """把 Hold 素材拉伸成（段长 x 音符宽）并旋转到段方向，粘贴到中点。"""
-    x1, y1 = start
-    x2, y2 = end
-    length = math.hypot(x2 - x1, y2 - y1)
-    target_w = _note_pixel_width(width)
-    if length < _MIN_NOTE_PIXELS or target_w <= _MIN_NOTE_PIXELS:
-        return
-    angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
-    piece = hold_image.resize(
-        (max(1, round(length)), target_w), Image.Resampling.LANCZOS
+    # 高度缩减为等比高度的 1/3
+    target_h = max(
+        1, round(target_w * note_image.height / note_image.width / 3)
     )
-    piece = piece.rotate(-angle, expand=True, resample=Image.Resampling.BICUBIC)
-    mid_x = round((x1 + x2) / 2) - piece.width // 2
-    mid_y = round((y1 + y2) / 2) - piece.height // 2
-    image.paste(piece, (mid_x, mid_y), piece)
+    resized = note_image.resize((round(target_w), target_h), Image.Resampling.LANCZOS)
+    image.paste(resized, (px - resized.width // 2, py - resized.height // 2), resized)
+    return True
 
 
 def _draw_note_bar(
@@ -1014,32 +1013,38 @@ def _draw_note_bar(
 
 
 def _draw_hold(
-    draw: ImageDraw.ImageDraw,
-    note: Note,
-    color: tuple[int, int, int],
-    columns: int,
+    draw: ImageDraw.ImageDraw, note: Note, columns: int
 ) -> None:
-    """Hold 填充多边形：中心路径左右各扩半宽，按分钟段分组绘制。"""
-    half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 4
+    """Slide（Hold）渲染：素材主色连续粗线，按分钟段分组，端部画圆帽。
+
+    素材是平条（纯色），直接用颜色画粗线保证路径连续无断点。
+    """
+    color = _hold_color()
     groups: dict[int, list[tuple[float, float, float]]] = {}
     for t, x1, width in note.points:
         col = _note_col(t, columns)
-        px = _note_x(x1, col)
-        half = width * half_scale
-        groups.setdefault(col, []).append((px, _note_y(t, col), half))
+        groups.setdefault(col, []).append((_note_x(x1, col), _note_y(t, col), width))
     for pts in groups.values():
         if len(pts) == 1:
-            px, py, half = pts[0]
-            thickness = _NOTE_THICKNESS / 2
-            draw.rounded_rectangle(
-                (px - half, py - thickness, px + half, py + thickness),
-                radius=3,
-                fill=color,
+            px, py, width = pts[0]
+            radius = _note_pixel_width(width) / 2
+            draw.ellipse(
+                (px - radius, py - radius, px + radius, py + radius), fill=color
             )
             continue
-        lefts = [(px - half, py) for px, py, half in pts]
-        rights = [(px + half, py) for px, py, half in reversed(pts)]
-        draw.polygon(lefts + rights, fill=color)
+        for start, end in zip(pts, pts[1:]):
+            width = (start[2] + end[2]) / 2
+            draw.line(
+                [(start[0], start[1]), (end[0], end[1])],
+                fill=color,
+                width=round(_note_pixel_width(width)),
+            )
+        # 端部圆帽
+        for px, py, width in (pts[0], pts[-1]):
+            radius = _note_pixel_width(width) / 2
+            draw.ellipse(
+                (px - radius, py - radius, px + radius, py + radius), fill=color
+            )
 
 
 def _note_col(t: float, columns: int) -> int:
