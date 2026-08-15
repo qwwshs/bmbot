@@ -207,7 +207,7 @@ def parse_chart(path: Path) -> ChartData:
     if meta.get("Charter"):
         chart.charter = meta["Charter"]
 
-    changes_raw, mults, moves, stops = _parse_speed_section(
+    changes_raw, rates, moves, offsets4, stops = _parse_speed_section(
         sections.get("speed", [])
     )
     # 过滤 0/负 BPM（防除零），同拍去重保留最后一条
@@ -218,8 +218,8 @@ def parse_chart(path: Path) -> ChartData:
         default_bpm = float(info.get("BpmText") or _DEFAULT_BPM)
     except ValueError:
         default_bpm = _DEFAULT_BPM
-    # pos 空间分段点（黑线早期谱无 para 标记，坐标为 pos = ∫速度x倍率 db）
-    pos_breaks = _build_pos_breaks(moves, mults, stops)
+    # pos 空间分段点（黑线早期谱无 para 标记，坐标为 pos；pos 含速度积分与拍数偏移）
+    pos_breaks = _build_pos_breaks(rates, moves, offsets4, stops)
 
     raw_notes = _parse_notes(sections.get("note", []))
     chart.notes = [
@@ -269,25 +269,36 @@ def _parse_speed_section(
     list[tuple[float, float]],
     list[tuple[float, float]],
     list[tuple[float, float]],
+    list[tuple[float, float]],
     list[float],
 ]:
-    """解析 #speed 段：BpmChange(拍,bpm,倍率) / BpmMove(拍,速度) / BpmStop(拍)。
+    """解析 #speed 段。
 
-    返回 (changes, mults, moves, stops)。
+    返回 (changes, rates, moves, offsets4, stops)：
+    - changes：BpmChange(拍, bpm)
+    - rates：BpmChange 第三位(拍, 速度)
+    - moves：BpmMove(拍, 拍数偏移)
+    - offsets4：BpmChange 第四位(拍, 拍数偏移)
+    - stops：BpmStop 拍数列表
     """
     changes: list[tuple[float, float]] = []
-    mults: list[tuple[float, float]] = []
+    rates: list[tuple[float, float]] = []
     moves: list[tuple[float, float]] = []
+    offsets4: list[tuple[float, float]] = []
     stops: list[float] = []
     for raw_stmt in "\n".join(lines).split(";"):
         stmt = raw_stmt.strip()
         match = re.match(
-            r"BpmChange:\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*(-?[\d.]+))?", stmt
+            r"BpmChange[=:]\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*(-?[\d.]+))?"
+            r"\s*(?:,\s*(-?[\d.]+))?",
+            stmt,
         )
         if match:
             beat = float(match.group(1))
             changes.append((beat, float(match.group(2))))
-            mults.append((beat, float(match.group(3) or 1.0)))
+            rates.append((beat, float(match.group(3) or 1.0)))
+            if match.group(4):
+                offsets4.append((beat, float(match.group(4))))
             continue
         match = re.match(r"BpmMove:\s*([\d.]+)\s*,\s*(-?[\d.]+)", stmt)
         if match:
@@ -296,41 +307,45 @@ def _parse_speed_section(
         match = re.match(r"BpmStop:\s*([\d.]+)", stmt)
         if match:
             stops.append(float(match.group(1)))
-    return changes, mults, moves, stops
+    return changes, rates, moves, offsets4, stops
 
 
-# pos 空间基础速度（无 BpmMove 时速度为 1，pos 与拍数一致）
+# pos 空间基础速度（无 BpmChange 速度时按 1，pos 与拍数一致）
 _POS_BASE_SPEED = 1.0
 
 
 def _build_pos_breaks(
+    rates: list[tuple[float, float]],
     moves: list[tuple[float, float]],
-    mults: list[tuple[float, float]],
+    offsets4: list[tuple[float, float]],
     stops: list[float],
 ) -> list[tuple[float, float]]:
     """构建 pos(beat) 分段点 (beat, pos)。
 
-    pos = ∫ BpmMove速度 x BpmChange倍率 db；BpmStop 段 pos 冻结（倍率置 0）。
+    pos = ∫ BpmChange速度 db + Σ(BpmMove第二值/BpmChange第四值 拍数偏移)；
+    BpmStop 段 pos 冻结（速度置 0）。
     """
     events: list[tuple[float, int, float]] = []
-    for beat, speed in moves:
-        events.append((beat, 0, speed))
-    for beat, mult in mults:
-        events.append((beat, 1, mult))
+    for beat, rate in rates:
+        events.append((beat, 1, rate))
+    for beat, offset in moves:
+        events.append((beat, 0, offset))
+    for beat, offset in offsets4:
+        events.append((beat, 0, offset))
     events.extend((beat, 2, 0.0) for beat in stops)
     events.sort(key=lambda e: (e[0], e[1]))
     breaks: list[tuple[float, float]] = [(0.0, 0.0)]
-    prev_beat, move_speed, mult = 0.0, _POS_BASE_SPEED, 1.0
+    prev_beat, rate = 0.0, _POS_BASE_SPEED
     for beat, kind, value in events:
-        pos = breaks[-1][1] + (beat - prev_beat) * move_speed * mult
-        breaks.append((beat, pos))
+        pos = breaks[-1][1] + (beat - prev_beat) * rate
         prev_beat = beat
         if kind == 0:
-            move_speed = value
+            pos += value  # 拍数偏移直接加到 pos
         elif kind == 1:
-            mult = value
+            rate = value
         else:
-            mult = 0.0  # BpmStop：pos 冻结
+            rate = 0.0  # BpmStop：pos 冻结
+        breaks.append((beat, pos))
     return breaks
 
 
