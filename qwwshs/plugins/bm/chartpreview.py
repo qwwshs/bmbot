@@ -340,8 +340,6 @@ def _note_x(x: float, col: int) -> float:
 
 
 def _note_y(t: float, col: int) -> float:
-    """全局时间秒 → 段内 y 像素。"""
-    return (
-        _TITLE_HEIGHT
-        + ((t - col * _SEGMENT_SECONDS) / _SEGMENT_SECONDS) * _COLUMN_HEIGHT
-    )
+    """全局时间秒 → 段内 y 像素（时间小的在下方，大的在上方）。"""
+    progress = (t - col * _SEGMENT_SECONDS) / _SEGMENT_SECONDS
+    return _TITLE_HEIGHT + (1 - progress) * _COLUMN_HEIGHT
