@@ -1557,8 +1557,12 @@ async def _render_chart_image(
         await matcher.finish("❌ 该谱面解析失败，请换一首试试")
     if not chart.notes:
         await matcher.finish("❌ 谱面中没有音符数据")
-    user_skin = _chart_skins.get(qq, DEFAULT_SKIN)
-    skin = chart.note_skin if chart.note_skin in SKIN_SETS else user_skin
+    if chart.note_skin == "Berry" or chart.note_skin not in SKIN_SETS:
+        # Berry（默认皮肤）或未知皮肤：用玩家选择的显示皮肤
+        skin = _chart_skins.get(qq, DEFAULT_SKIN)
+    else:
+        # 联动/特色谱面保留谱面指定皮肤
+        skin = chart.note_skin
     img_bytes = await asyncio.to_thread(
         render_chart_preview,
         chart,

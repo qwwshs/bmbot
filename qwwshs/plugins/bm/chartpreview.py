@@ -33,10 +33,11 @@ _CHART_DIFFS = ("RU", "TT", "IL", "RL", "DM", "FL")
 
 NOTE_DIR = Path(__file__).resolve().parent / "note"
 
-# 音符皮肤：皮肤名 → {音符类型: 素材文件名}（类型缺失回退 White 对应素材）。
+# 音符皮肤：皮肤名 → {音符类型: 素材文件名}（类型缺失回退 Tech 对应素材）。
 # 素材映射来自拆包材质（Material/*.json 的 _MainTex 引用）与 Sprite 数据。
+# Tech 即游戏里的 White 皮肤（NoteSkin 字段写 Tech 的谱面用同一套素材）。
 SKIN_SETS: dict[str, dict[str, str]] = {
-    "White": {
+    "Tech": {
         "Tap": "White_Tap.png",
         "Drag": "White_Drag.png",
         "Hold": "White_Hold.png",
@@ -93,7 +94,7 @@ SKIN_SETS: dict[str, dict[str, str]] = {
         "Hold": "Red_Hold.png",
     },
 }
-DEFAULT_SKIN = "White"
+DEFAULT_SKIN = "Tech"
 
 # 音符类型 → 颜色（素材缺失时的回退色：Tap 蓝 / Drag 黄 / Hold 红）
 NOTE_COLORS = {
@@ -1079,11 +1080,14 @@ def _draw_note_image(
     columns: int,
     skin: str = DEFAULT_SKIN,
 ) -> bool:
-    """用指定皮肤素材画 Tap/Drag：宽度拉伸到音符宽度，高度固定。"""
+    """用指定皮肤素材画 Tap/Drag：宽度拉伸到音符宽度，高度固定。
+
+    Tech 皮肤的 Drag（wipe）染黄色，其余皮肤保持素材本色。
+    """
     note_image = _note_image(kind, skin)
     if note_image is None:
         return False
-    if kind == "Drag":
+    if kind == "Drag" and skin == "Tech":
         tinted = _tinted_note_image(kind, NOTE_COLORS["Drag"], skin)
         if tinted is not None:
             note_image = tinted
