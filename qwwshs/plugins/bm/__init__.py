@@ -46,7 +46,14 @@ from .charter import (
     save_charters,
     search_charters,
 )
-from .chartpreview import available_diffs, find_chart, parse_chart, render_chart_preview
+from .chartpreview import (
+    DEFAULT_SKIN,
+    SKIN_SETS,
+    available_diffs,
+    find_chart,
+    parse_chart,
+    render_chart_preview,
+)
 from .constants import DATA_DIR, ConstantsError, get_song_constants
 from .decrypt import DecryptError, parse_account_data
 from .rating import ALL_DIFFS, compute_rating, normalize_n10_name, parse_scores
@@ -118,6 +125,8 @@ _song_pending: dict[str, dict] = {}
 # QQ 号 -> {stage: song/diff, names: 曲名列表, song: 已选曲名, diffs: 难度列表,
 #           expire: 过期时间}（bmchart 先选曲再选难度）
 _chart_pending: dict[str, dict] = {}
+# QQ 号 -> 音符皮肤名（/bmskin 切换，缺省 DEFAULT_SKIN；谱面指定皮肤时优先）
+_chart_skins: dict[str, str] = {}
 # QQ 号 -> {alias: 别名, names: 搜索结果, expire: 过期时间}（bmaddname 流程）
 _addname_pending: dict[str, dict] = {}
 # QQ 号 -> {alias: 别名, names: 搜索结果, expire: 过期时间}（bmremovename 流程）
@@ -459,6 +468,7 @@ bm_charter_list = on_command("bmrelatedcharterlist", priority=5, block=True)
 bm_charter_unset = on_command("bmremovetheprimitivecharter", priority=5, block=True)
 bm_chart = on_command("bmchartlist", priority=5, block=True)
 bm_chart_preview = on_command("bmchart", priority=5, block=True)
+bm_skin = on_command("bmskin", priority=5, block=True)
 bm_random = on_command("bmrandom", priority=5, block=True)
 bm_rating_style = on_command("bmratingstyle", priority=5, block=True)
 bm_file_watch = on_message(priority=10, block=False)
@@ -510,6 +520,7 @@ _HELP_TEXT = (
     "   13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
     "/bmrandom <定数1> [定数2] [难度...] — 在定数区间内随机挑一首曲目\n"
     "/bmchart <曲名> — 谱面预览图（先选曲目再选难度）\n"
+    "/bmskin — 切换谱面预览的音符皮肤\n"
     "/bmbotversion — 查看 bot 版本\n"
     "━━━━━━━━━━━━━━━━━━\n"
     "📱 存档位置：/Android/data/com.skywaystudio.BerryMelody/files/FormalSave.txt"
@@ -1514,7 +1525,7 @@ async def _ask_chart_difficulty(matcher: Matcher, qq: str, song: str) -> None:
     if not diffs:
         await matcher.finish("❌ 该曲目没有谱面文件")
     if len(diffs) == 1:
-        await _render_chart_image(matcher, song, diffs[0])
+        await _render_chart_image(matcher, qq, song, diffs[0])
         return
     _chart_pending[qq] = {
         "stage": "diff",
@@ -1529,8 +1540,10 @@ async def _ask_chart_difficulty(matcher: Matcher, qq: str, song: str) -> None:
     await matcher.finish(MessageSegment.image(img_bytes))
 
 
-async def _render_chart_image(matcher: Matcher, song: str, diff: str) -> None:
-    """按曲名+难度渲染谱面预览图并发送。"""
+async def _render_chart_image(
+    matcher: Matcher, qq: str, song: str, diff: str
+) -> None:
+    """按曲名+难度渲染谱面预览图并发送（谱面指定皮肤优先，否则用玩家皮肤）。"""
     found = await asyncio.to_thread(find_chart, song, diff)
     if found is None:
         await matcher.finish("❌ 该曲目没有对应难度的谱面文件")
@@ -1541,10 +1554,45 @@ async def _render_chart_image(matcher: Matcher, song: str, diff: str) -> None:
         await matcher.finish("❌ 该谱面解析失败，请换一首试试")
     if not chart.notes:
         await matcher.finish("❌ 谱面中没有音符数据")
+    user_skin = _chart_skins.get(qq, DEFAULT_SKIN)
+    skin = chart.note_skin if chart.note_skin in SKIN_SETS else user_skin
     img_bytes = await asyncio.to_thread(
-        render_chart_preview, chart, f"{_display_name(song)} ({found_diff})"
+        render_chart_preview,
+        chart,
+        f"{_display_name(song)} ({found_diff})",
+        skin,
     )
     await matcher.finish(MessageSegment.image(img_bytes))
+
+
+@bm_skin.handle()
+async def handle_skin(event: MessageEvent, arg: Message = CommandArg()) -> None:
+    """切换 /bmchart 音符皮肤：/bmskin 查看全部，回复序号或直接发皮肤名切换。"""
+    qq = str(event.user_id)
+    text = arg.extract_plain_text().strip()
+    names = list(SKIN_SETS)
+    current = _chart_skins.get(qq, DEFAULT_SKIN)
+    if not text:
+        lines = [f"🎨 音符皮肤（当前：{current}）"]
+        lines.extend(
+            f"{i + 1}. {name}{' ←' if name == current else ''}"
+            for i, name in enumerate(names)
+        )
+        lines.append("回复序号或直接发送皮肤名切换\n谱面指定皮肤时自动优先")
+        img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+        await bm_skin.finish(MessageSegment.image(img_bytes))
+    if text.isdigit():
+        index = int(text)
+        if index < 1 or index > len(names):
+            await bm_skin.finish(f"❌ 序号无效（1-{len(names)}）")
+        name = names[index - 1]
+    else:
+        matched = [n for n in names if n.lower() == text.lower()]
+        if not matched:
+            await bm_skin.finish(f"❌ 未找到皮肤「{text}」，可用：{'/'.join(names)}")
+        name = matched[0]
+    _chart_skins[qq] = name
+    await bm_skin.finish(f"✅ 已切换音符皮肤为 {name}")
 
 
 @bm_chart_pick.handle()
@@ -1577,7 +1625,7 @@ async def handle_chart_pick(event: MessageEvent) -> None:
             f"❌ 序号无效（1-{len(diffs)}），请重新 /bmchart 查询"
         )
         return
-    await _render_chart_image(bm_chart_pick, state["song"], diffs[index - 1])
+    await _render_chart_image(bm_chart_pick, qq, state["song"], diffs[index - 1])
 
 
 @bm_random.handle()

@@ -33,6 +33,36 @@ _CHART_DIFFS = ("RU", "TT", "IL", "RL", "DM", "FL")
 
 NOTE_DIR = Path(__file__).resolve().parent / "note"
 
+# 音符皮肤：皮肤名 → {音符类型: 素材文件名}（类型缺失回退 White 对应素材）
+SKIN_SETS: dict[str, dict[str, str]] = {
+    "White": {
+        "Tap": "White_Tap.png",
+        "Drag": "White_Drag.png",
+        "Hold": "White_Hold.png",
+    },
+    "Luminous": {
+        "Tap": "LuminousTap.png",
+        "Drag": "LuminousDrag.png",
+        "Hold": "LuminousHold.png",
+    },
+    "Berry": {
+        "Tap": "Berry_Tap.png",
+        "Drag": "Berry_Drag.png",
+        "Hold": "Berry_Hold.png",
+    },
+    "Dynamix": {
+        "Tap": "Dynamix_Tap.png",
+        "Drag": "Dynamix_Drag.png",
+        "Hold": "Dynamix_Hold.png",
+    },
+    "Dr3": {
+        "Tap": "Dr3_Tap.png",
+        "Drag": "White_Drag.png",
+        "Hold": "Dr3_Hold.png",
+    },
+}
+DEFAULT_SKIN = "White"
+
 # 音符类型 → 颜色（素材缺失时的回退色：Tap 蓝 / Drag 黄 / Hold 红）
 NOTE_COLORS = {
     "Tap": (64, 160, 255),
@@ -102,6 +132,7 @@ class ChartData:
     charter: str = ""
     level: str = ""
     dlevel: str = ""  # 定数（chart/Info 对照表中的 DLevel）
+    note_skin: str = ""  # 谱面指定皮肤（#info 的 NoteSkin 字段）
     notes: list[Note] = field(default_factory=list)
     # 黑线（#anim 的 BlackLine）：每条为 (时间秒, x) 折线
     black_lines: list[list[tuple[float, float]]] = field(default_factory=list)
@@ -129,6 +160,9 @@ def parse_chart(path: Path) -> ChartData:
     chart.artist = info.get("Artist") or ""
     chart.charter = info.get("Charter") or ""
     chart.level = info.get("Level") or ""
+    chart.note_skin = _find_note_skin(sections.get("anim", [])) or _parse_note_skin(
+        info.get("NoteSkin") or ""
+    )
 
     # 曲目↔谱面对照（chart/Info）：补定数与规范谱师
     name_parts = path.name.rsplit(" ", 1)
@@ -172,6 +206,23 @@ def _parse_info(lines: list[str]) -> dict[str, str]:
         key, _, value = line.partition(":")
         info[key.strip()] = value.strip().rstrip(";").strip()
     return info
+
+
+def _parse_note_skin(value: str) -> str:
+    """解析 NoteSkin 值（"0,Berry" → "Berry"；本地化块等无效值返回空）。"""
+    text = value.strip()
+    if not text or text.startswith("{"):
+        return ""
+    return text.split(",")[-1].strip()
+
+
+def _find_note_skin(lines: list[str]) -> str:
+    """在 #anim 段里找 ``NoteSkin: <序号>,<皮肤名>`` 行。"""
+    for line in lines:
+        if line.startswith("NoteSkin"):
+            _, _, value = line.partition(":")
+            return _parse_note_skin(value.strip().rstrip(";").strip())
+    return ""
 
 
 def _parse_bpm_changes(lines: list[str]) -> list[tuple[float, float]]:
@@ -788,8 +839,10 @@ def _name_variants(name: str) -> list[str]:
     return [text.lower(), text]
 
 
-def render_chart_preview(chart: ChartData, display_name: str) -> bytes:
-    """渲染谱面预览图，返回 PNG 字节。"""
+def render_chart_preview(
+    chart: ChartData, display_name: str, skin: str = DEFAULT_SKIN
+) -> bytes:
+    """渲染谱面预览图，返回 PNG 字节。``skin`` 为音符皮肤名。"""
     # 分钟段数：结尾只超出分界 _SEGMENT_EPSILON 以内的按整分钟算（避免空栏）
     whole, remainder = divmod(chart.duration, _SEGMENT_SECONDS)
     columns = max(1, int(whole) + (1 if remainder > _SEGMENT_EPSILON else 0))
@@ -806,7 +859,7 @@ def render_chart_preview(chart: ChartData, display_name: str) -> bytes:
     _draw_title(draw, width, chart, display_name)
     _draw_separators(draw, columns, height)
     _draw_black_lines(image, chart.black_lines, columns)
-    _draw_notes(image, draw, chart.notes, columns)
+    _draw_notes(image, draw, chart.notes, columns, skin)
 
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
@@ -900,6 +953,7 @@ def _draw_notes(
     draw: ImageDraw.ImageDraw,
     notes: list[Note],
     columns: int,
+    skin: str = DEFAULT_SKIN,
 ) -> None:
     """音符绘制：note/ 素材优先，缺失时回退彩色条。
 
@@ -911,10 +965,10 @@ def _draw_notes(
         if note.kind == "Hold":
             if hold_overlay is None:
                 hold_overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-            _draw_hold_polygon(ImageDraw.Draw(hold_overlay), note, columns)
+            _draw_hold_polygon(ImageDraw.Draw(hold_overlay), note, columns, skin)
         else:
             for point in note.points:
-                if not _draw_note_image(image, note.kind, point, columns):
+                if not _draw_note_image(image, note.kind, point, columns, skin):
                     _draw_note_bar(draw, point, NOTE_COLORS[note.kind], columns)
     if hold_overlay is not None:
         image.paste(hold_overlay, (0, 0), hold_overlay)
@@ -925,31 +979,39 @@ def _note_pixel_width(width: float) -> float:
     return max(1.0, width * (_COLUMN_WIDTH - 2 * _LANE_PAD) / 2)
 
 
-_note_image_cache: dict[str, Image.Image | None] = {}
+_note_image_cache: dict[tuple[str, str], Image.Image | None] = {}
 
 
-def _note_image(kind: str) -> Image.Image | None:
-    """加载 note/ 下的音符素材（White_Tap/Drag/Hold.png），带缓存。"""
-    if kind not in _note_image_cache:
+def _note_image(kind: str, skin: str = DEFAULT_SKIN) -> Image.Image | None:
+    """加载指定皮肤的素材，皮肤/类型缺失时回退 White 对应素材。"""
+    key = (skin, kind)
+    if key not in _note_image_cache:
         image = None
-        path = NOTE_DIR / f"White_{kind}.png"
-        if path.exists():
-            try:
-                image = Image.open(path).convert("RGBA")
-            except OSError:
-                image = None
-        _note_image_cache[kind] = image
-    return _note_image_cache[kind]
+        files = SKIN_SETS.get(skin, {})
+        for filename in (files.get(kind), SKIN_SETS[DEFAULT_SKIN].get(kind)):
+            if not filename:
+                continue
+            path = NOTE_DIR / filename
+            if path.exists():
+                try:
+                    image = Image.open(path).convert("RGBA")
+                except OSError:
+                    image = None
+                break
+        _note_image_cache[key] = image
+    return _note_image_cache[key]
 
 
-_tinted_cache: dict[tuple[str, tuple[int, int, int]], Image.Image] = {}
+_tinted_cache: dict[tuple[str, str, tuple[int, int, int]], Image.Image] = {}
 
 
-def _tinted_note_image(kind: str, color: tuple[int, int, int]) -> Image.Image | None:
+def _tinted_note_image(
+    kind: str, color: tuple[int, int, int], skin: str = DEFAULT_SKIN
+) -> Image.Image | None:
     """按目标色染色的素材（逐通道乘 color/255），带缓存。"""
-    key = (kind, color)
+    key = (skin, kind, color)
     if key not in _tinted_cache:
-        base = _note_image(kind)
+        base = _note_image(kind, skin)
         if base is None:
             return None
         r_ch, g_ch, b_ch, a_ch = base.split()
@@ -963,19 +1025,19 @@ def _tinted_note_image(kind: str, color: tuple[int, int, int]) -> Image.Image | 
 _hold_color_cache: dict[str, tuple[int, int, int] | None] = {}
 
 
-def _hold_color() -> tuple[int, int, int]:
-    """Hold 素材主色（素材是平条，直接用色画连续粗线），缺失回退红。"""
-    if "color" not in _hold_color_cache:
+def _hold_color(skin: str = DEFAULT_SKIN) -> tuple[int, int, int]:
+    """指定皮肤 Hold 素材主色（素材是平条，直接用色画连续粗线），缺失回退红。"""
+    if skin not in _hold_color_cache:
         color: tuple[int, int, int] | None = None
-        image = _note_image("Hold")
+        image = _note_image("Hold", skin)
         if image is not None:
             pixels = [p[:3] for p in image.getdata() if p[3] > _ALPHA_THRESHOLD]
             if pixels:
                 color = tuple(
                     sum(c[i] for c in pixels) // len(pixels) for i in range(3)
                 )
-        _hold_color_cache["color"] = color
-    return _hold_color_cache["color"] or NOTE_COLORS["Hold"]
+        _hold_color_cache[skin] = color
+    return _hold_color_cache[skin] or NOTE_COLORS["Hold"]
 
 
 def _draw_note_image(
@@ -983,13 +1045,14 @@ def _draw_note_image(
     kind: str,
     point: tuple[float, float, float],
     columns: int,
+    skin: str = DEFAULT_SKIN,
 ) -> bool:
-    """用 note/ 素材画 Tap/Drag：宽度拉伸到音符宽度，高度固定。"""
-    note_image = _note_image(kind)
+    """用指定皮肤素材画 Tap/Drag：宽度拉伸到音符宽度，高度固定。"""
+    note_image = _note_image(kind, skin)
     if note_image is None:
         return False
     if kind == "Drag":
-        tinted = _tinted_note_image(kind, NOTE_COLORS["Drag"])
+        tinted = _tinted_note_image(kind, NOTE_COLORS["Drag"], skin)
         if tinted is not None:
             note_image = tinted
     t, x1, width = point
@@ -1027,13 +1090,16 @@ def _draw_note_bar(
 
 
 def _draw_hold_polygon(
-    draw: ImageDraw.ImageDraw, note: Note, columns: int
+    draw: ImageDraw.ImageDraw,
+    note: Note,
+    columns: int,
+    skin: str = DEFAULT_SKIN,
 ) -> None:
     """Slide（Hold）纯色块：中心路径左右各扩半宽画填充多边形。
 
-    颜色取 Hold 素材主色（素材是平条），透明度由叠加层控制。
+    颜色取指定皮肤 Hold 素材主色（素材是平条），透明度由叠加层控制。
     """
-    color = _hold_color()
+    color = _hold_color(skin)
     half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 4
     groups: dict[int, list[tuple[float, float, float]]] = {}
     for t, x1, width in note.points:
