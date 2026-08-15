@@ -1476,9 +1476,18 @@ async def handle_chart_preview(arg: Message = CommandArg()) -> None:
             "例如：/bmchart ether vortex\n/bmchart fallen angel tt\n"
             "难度可省（缺省选该曲定数最高的难度）；支持 RL/IL/TT/RU"
         )
-    query = parts[0]
-    diff = parts[1] if len(parts) > 1 else None
-    found = await asyncio.to_thread(find_chart, query, diff)
+    # 曲名可能含空格：最后一个 token 是合法难度才视为难度参数
+    last = parts[-1].upper()
+    if last in ("RL", "IL", "TT", "RU", "DM", "FL"):
+        query = " ".join(parts[:-1])
+        diff = last
+        found = await asyncio.to_thread(find_chart, query, diff)
+        if found is None:
+            found = await asyncio.to_thread(find_chart, " ".join(parts))
+    else:
+        query = " ".join(parts)
+        diff = None
+        found = await asyncio.to_thread(find_chart, query)
     if found is None:
         await bm_chart_preview.finish("❌ 未找到该曲目的谱面文件")
     path, found_diff = found
