@@ -118,10 +118,10 @@ _MIN_SAMPLES = 4
 _MAX_SAMPLES = 400
 _DEFAULT_SAMPLES = 100
 
-# 布局：每 30 秒一段，段宽 320px、高 2000px
+# 布局：每 30 秒一段，段宽 320px、高 2667px（2000 放大 1/3）
 _SEGMENT_SECONDS = 30.0
 _COLUMN_WIDTH = 320
-_COLUMN_HEIGHT = 2000
+_COLUMN_HEIGHT = round(2000 * 4 / 3)
 _SEPARATOR_WIDTH = 4
 _EDGE_PAD = 24  # 图整体左右边距
 _LANE_PAD = 42  # 轨道左右留白（音符 x ∈ [-1, 1] 映射到这段范围）
