@@ -170,16 +170,31 @@ _FONT_CANDIDATES = [
 ]
 
 
-def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
-    key = (size, bold)
+@lru_cache(maxsize=1)
+def _regular_font_path() -> str | None:
+    """fonts/ 下 Regular 字重字体文件（如 BM_NEOType-Regular.ttf）。"""
+    for ext in ("*.otf", "*.ttf", "*.ttc", "*.otc"):
+        for path in sorted(_FONT_DIR.glob(ext)):
+            if "regular" in path.stem.lower():
+                return str(path)
+    return None
+
+
+def _font(
+    size: int, *, bold: bool = False, regular: bool = False
+) -> ImageFont.FreeTypeFont:
+    key = (size, bold, regular)
     if key not in _font_cache:
-        # 打包字体优先（仅一个字重，粗体/常规共用），其次粗体/常规对应文件
+        # 打包字体优先（仅一个字重，粗体/常规共用；regular=True 时用 Regular 文件）
         bundled = _bundled_font_path()
         if bundled is not None:
             try:
-                _font_cache[key] = ImageFont.truetype(
-                    bundled[0], size, index=bundled[1]
-                )
+                path, index = bundled
+                if regular:
+                    reg = _regular_font_path()
+                    if reg is not None:
+                        path, index = reg, 0
+                _font_cache[key] = ImageFont.truetype(path, size, index=index)
                 return _font_cache[key]
             except OSError:
                 pass
@@ -918,7 +933,10 @@ CARD2_TEXT_GAP = 12  # 曲绘右缘与右侧文字区间距
 CARD2_TEXT_PAD = 16  # 右侧文字区右缘内边距
 CARD2_RADIUS = 20  # 底板圆角半径
 CARD2_MATRIX_RADIUS = 18  # 等级分布框圆角半径
-CARD2_SECTION_TEX_H = 52  # B30/N10 标题底板纹路2.png 高度
+CARD2_SECTION_TITLE = 60  # B30/N10 标题字号（原 30 的 2 倍）
+CARD2_SECTION_TEX_H = 104  # B30/N10 标题底板纹路2.png 高度（原 52 的 2 倍）
+CARD2_SECTION_GRID_GAP = 12  # 标题底板下缘与网格的间距
+_SECTION_TEX_ALPHA = 0.75  # 标题底板纹路2.png 透明度（现在的 75%）
 CARD2_BASE = 30  # 普通文字字号（GOAL/定数，加粗）
 CARD2_SCORE = 44  # 分数字号（加粗；48 时 7 位满分溢出文字区）
 CARD2_TITLE_MAX = 33  # 曲名字号（原 22 的 1.5 倍；单行，过长截断加 …）
@@ -1131,13 +1149,15 @@ def _load_grade_image(grade: str, height: int = CARD2_GRADE_H) -> Image.Image | 
 _ink_cache: dict[tuple[str, int, bool], tuple[int, int]] = {}
 
 
-def _text_ink(text: str, size: int, *, bold: bool = True) -> tuple[int, int]:
+def _text_ink(
+    text: str, size: int, *, bold: bool = True, regular: bool = False
+) -> tuple[int, int]:
     """文字墨迹相对锚点 y（anchor='la'）的 (上, 下) 偏移，用于行间贴紧。"""
-    key = (text, size, bold)
+    key = (text, size, bold, regular)
     hit = _ink_cache.get(key)
     if hit is not None:
         return hit
-    font = _font(size, bold=bold)
+    font = _font(size, bold=bold, regular=regular)
     pad = 8
     probe = Image.new(
         "RGB", (int(font.getlength(text)) + pad * 2, size * 2 + pad * 2), (0, 0, 0)
@@ -1204,7 +1224,7 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     ink_top = y + CARD2_COVER_M
 
     # 曲名：单行，过长截断加 …
-    title_font = _font(CARD2_TITLE_MAX, bold=True)
+    title_font = _font(CARD2_TITLE_MAX, regular=True)
     title_text = _ellipsize(
         draw, chart.original_name or chart.name, title_font, right - lx
     )
@@ -1214,7 +1234,7 @@ def _draw_rating_card_new(  # noqa: PLR0913, PLR0917
     pot_text = f"rating:{chart.potential:.3f}"
 
     # 预计算各行墨迹范围，行距自适应
-    t_top, t_bottom = _text_ink(title_text, CARD2_TITLE_MAX, bold=True)
+    t_top, t_bottom = _text_ink(title_text, CARD2_TITLE_MAX, regular=True)
     s_top, s_bottom = _text_ink(score_text, CARD2_SCORE, bold=True)
     g_top, g_bottom = _text_ink(">" + goal_number, CARD2_BASE, bold=True)
     p_top, p_bottom = _text_ink(pot_text, CARD2_POT_FONT, bold=True)
@@ -1302,25 +1322,30 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
 ) -> int:
     """新版分区：纹路2.png 标题底板 + 居中标题 + 网格（每行 5 首）。"""
     y += 24
-    # 纹路2.png 作为 B30/N10 字符串的底板（保持比例，居中于标题）
+    tex_h = CARD2_SECTION_TEX_H
+    tex_top = y + CARD2_SECTION_TITLE // 2 - tex_h // 2
+    # 纹路2.png 作为 B30/N10 字符串的底板（保持比例，居中于标题，透明度 75%）
     texture = _load_ui_texture("纹路2.png")
     if texture is not None:
-        tex_h = CARD2_SECTION_TEX_H
         tex_w = max(1, round(texture.width * tex_h / texture.height))
         texture = texture.resize((tex_w, tex_h), Image.Resampling.LANCZOS)
+        alpha = texture.getchannel("A").point(
+            lambda p: round(p * _SECTION_TEX_ALPHA)
+        )
+        texture.putalpha(alpha)
         img.paste(
             texture,
-            (int(img.width / 2 - tex_w / 2), y + 15 - tex_h // 2),
+            (int(img.width / 2 - tex_w / 2), tex_top),
             texture,
         )
     draw.text(
         (img.width / 2, y),
         title,
-        font=_font(30, bold=True),
+        font=_font(CARD2_SECTION_TITLE, bold=True),
         fill=CARD2_TEXT,
         anchor="ma",
     )
-    y += 34 + 14
+    y = tex_top + tex_h + CARD2_SECTION_GRID_GAP
     card_w = CARD2_PLATE_W + CARD2_GAP
     for index, chart in enumerate(charts):
         col = index % CARD2_PER_ROW
@@ -1369,7 +1394,12 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     b30_rows = (len(result.b30_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
     n10_rows = (len(result.n10_charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
     grid_h = CARD2_PLATE_H + CARD2_GAP
-    section_h = 24 + 34 + 14
+    section_h = (
+        24
+        + CARD2_SECTION_TITLE // 2
+        + CARD2_SECTION_TEX_H // 2
+        + CARD2_SECTION_GRID_GAP
+    )
     matrix_h = (1 + len(GRADES)) * 44 + 2 * CARD2_MATRIX_PAD
     # 等级矩阵：玩家名（名字条）下方，左对齐（避开左侧头像）
     matrix_y = CARD2_AVATAR_TOP + CARD2_AVATAR + CARD2_MATRIX_PAD
@@ -1410,18 +1440,27 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     bar_bottom = bar_top + CARD2_NAME_BAR_H
     # 名字条：x 从整图起点 0 到 4 倍头像长，纵坐标中点与头像相同，图层在头像之下
     draw.rectangle([0, bar_top, CARD2_NAME_BAR_W, bar_bottom], fill=CARD2_NAME_BAR)
+    # zhuye 纹理叠在玩家名底板上（玩家名/头像之下、底板之上，大小同底板）
+    texture = _load_ui_texture(
+        "zhuye_0049_................................................................png"
+    )
+    if texture is not None:
+        texture = texture.resize(
+            (CARD2_NAME_BAR_W, CARD2_NAME_BAR_H), Image.Resampling.LANCZOS
+        )
+        img.paste(texture, (0, bar_top), texture)
     # 玩家名：以头像横坐标中点为起点、名字条终点为终点居中
     name_mid = avatar_x + CARD2_AVATAR // 2
     name = _ellipsize(
         draw,
         player_name,
-        _font(CARD2_NAME_FONT, bold=True),
+        _font(CARD2_NAME_FONT, regular=True),
         CARD2_NAME_BAR_W - name_mid - 16,
     )
     draw.text(
         ((name_mid + CARD2_NAME_BAR_W) / 2, (bar_top + bar_bottom) / 2),
         name,
-        font=_font(CARD2_NAME_FONT, bold=True),
+        font=_font(CARD2_NAME_FONT, regular=True),
         fill=(255, 255, 255),
         anchor="mm",
     )
@@ -1455,7 +1494,7 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     draw.text(
         (badge_x + CARD2_RATING_BADGE_W // 2, badge_y + CARD2_RATING_BADGE_H // 2),
         f"{result.rating:.2f}",
-        font=_font(CARD2_RATING_FONT, bold=True),
+        font=_font(CARD2_RATING_FONT, regular=True),
         fill=(255, 255, 255),
         anchor="mm",
     )
