@@ -1535,7 +1535,10 @@ async def _render_chart_image(matcher: Matcher, song: str, diff: str) -> None:
     if found is None:
         await matcher.finish("❌ 该曲目没有对应难度的谱面文件")
     path, found_diff = found
-    chart = await asyncio.to_thread(parse_chart, path)
+    try:
+        chart = await asyncio.to_thread(parse_chart, path)
+    except (ValueError, OSError):
+        await matcher.finish("❌ 该谱面解析失败，请换一首试试")
     if not chart.notes:
         await matcher.finish("❌ 谱面中没有音符数据")
     img_bytes = await asyncio.to_thread(
