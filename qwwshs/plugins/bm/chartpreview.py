@@ -32,10 +32,10 @@ _NOTE_TYPES = tuple(NOTE_COLORS)
 # Hold 每段点数（拍, x, y）
 _NOTE_SEGMENT = 3
 
-# 布局：每分钟一段，段宽 320px、高 1000px
+# 布局：每分钟一段，段宽 320px、高 2000px
 _SEGMENT_SECONDS = 60.0
 _COLUMN_WIDTH = 320
-_COLUMN_HEIGHT = 1000
+_COLUMN_HEIGHT = 2000
 _SEPARATOR_WIDTH = 4
 _EDGE_PAD = 24  # 图整体左右边距
 _LANE_PAD = 42  # 轨道左右留白（音符 x ∈ [-1, 1] 映射到这段范围）
@@ -52,7 +52,10 @@ _SEGMENT_EPSILON = 0.5
 
 @dataclass(slots=True)
 class Note:
-    """单个音符；points 为 (时间秒, x, y) 序列（Hold 多段）。"""
+    """单个音符；points 为 (时间秒, x1, 宽度) 序列（Hold 多段）。
+
+    x1 是音符中心位置（≈ -1~1），宽度为条宽（x1 ± 宽/2 为条的两端）。
+    """
 
     kind: str
     points: list[tuple[float, float, float]] = field(default_factory=list)
@@ -267,12 +270,25 @@ def _draw_notes(
         if note.kind == "Hold":
             _draw_hold(draw, note, color, columns)
         else:
-            for t, x, _y in note.points:
-                px, py = _note_pos(t, x, columns)
-                radius = 6 if note.kind == "Tap" else 5
-                draw.ellipse(
-                    (px - radius, py - radius, px + radius, py + radius), fill=color
-                )
+            for point in note.points:
+                _draw_note_bar(draw, point, color, columns)
+
+
+def _draw_note_bar(
+    draw: ImageDraw.ImageDraw,
+    point: tuple[float, float, float],
+    color: tuple[int, int, int],
+    columns: int,
+) -> None:
+    """Tap/Drag 横向条：x1 为中心，width 为宽度。"""
+    t, x1, width = point
+    col = _note_col(t, columns)
+    px = _note_x(x1, col)
+    half = width * (_COLUMN_WIDTH - 2 * _LANE_PAD) / 4
+    py = _note_y(t, col)
+    draw.rounded_rectangle(
+        (px - half, py - 7, px + half, py + 7), radius=4, fill=color
+    )
 
 
 def _draw_hold(
@@ -281,46 +297,43 @@ def _draw_hold(
     color: tuple[int, int, int],
     columns: int,
 ) -> None:
-    """Hold 折线：按分钟段分组绘制（跨段时折线分栏）。"""
-    segment: list[tuple[float, float]] = []
-    last_col = -1
-    for t, x, _y in note.points:
-        px, py = _note_pos(t, x, columns)
-        col = int(t // _SEGMENT_SECONDS)
-        if segment and col != last_col:
-            _draw_polyline(draw, segment, color)
-            segment = []
-        segment.append((px, py))
-        last_col = col
-    if segment:
-        _draw_polyline(draw, segment, color)
+    """Hold 填充多边形：中心路径左右各扩半宽，按分钟段分组绘制。"""
+    half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 4
+    groups: dict[int, list[tuple[float, float, float]]] = {}
+    for t, x1, width in note.points:
+        col = _note_col(t, columns)
+        px = _note_x(x1, col)
+        half = width * half_scale
+        groups.setdefault(col, []).append((px, _note_y(t, col), half))
+    for pts in groups.values():
+        if len(pts) == 1:
+            px, py, half = pts[0]
+            draw.rounded_rectangle(
+                (px - half, py - 7, px + half, py + 7), radius=4, fill=color
+            )
+            continue
+        lefts = [(px - half, py) for px, py, half in pts]
+        rights = [(px + half, py) for px, py, half in reversed(pts)]
+        draw.polygon(lefts + rights, fill=color)
 
 
-def _draw_polyline(
-    draw: ImageDraw.ImageDraw,
-    points: list[tuple[float, float]],
-    color: tuple[int, int, int],
-) -> None:
-    if len(points) == 1:
-        px, py = points[0]
-        draw.ellipse((px - 6, py - 6, px + 6, py + 6), fill=color)
-        return
-    draw.line(points, fill=color, width=9, joint="curve")
-    for px, py in (points[0], points[-1]):
-        draw.ellipse((px - 5, py - 5, px + 5, py + 5), fill=color)
+def _note_col(t: float, columns: int) -> int:
+    return min(int(t // _SEGMENT_SECONDS), columns - 1)
 
 
-def _note_pos(t: float, x: float, columns: int) -> tuple[float, float]:
-    """音符坐标 → 像素。t 为全局秒，x ∈ [-1, 1]。"""
-    col = min(int(t // _SEGMENT_SECONDS), columns - 1)
-    px = (
+def _note_x(x: float, col: int) -> float:
+    """音符中心 x（-1~1）→ 像素。"""
+    return (
         _EDGE_PAD
         + col * (_COLUMN_WIDTH + _SEPARATOR_WIDTH)
         + _LANE_PAD
         + (x + 1) / 2 * (_COLUMN_WIDTH - 2 * _LANE_PAD)
     )
-    py = (
+
+
+def _note_y(t: float, col: int) -> float:
+    """全局时间秒 → 段内 y 像素。"""
+    return (
         _TITLE_HEIGHT
         + ((t - col * _SEGMENT_SECONDS) / _SEGMENT_SECONDS) * _COLUMN_HEIGHT
     )
-    return px, py
