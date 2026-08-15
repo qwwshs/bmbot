@@ -1105,23 +1105,26 @@ def _draw_notes(
     columns: int,
     skin: str = DEFAULT_SKIN,
 ) -> None:
-    """音符绘制：note/ 素材优先，缺失时回退彩色条。
+    """音符绘制：Slide（Hold）在底层，Tap/Drag 在其上方。
 
-    Hold 统一画到透明叠加层（75% 透明度）最后合成，保证盖在黑线上、
-    被 Tap/Drag 盖住。
+    Hold 先画到透明叠加层（75% 透明度）并合成，再画 Tap/Drag；
+    素材缺失时回退彩色条。
     """
     hold_overlay: Image.Image | None = None
     for note in notes:
-        if note.kind == "Hold":
-            if hold_overlay is None:
-                hold_overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-            _draw_hold_polygon(ImageDraw.Draw(hold_overlay), note, columns, skin)
-        else:
-            for point in note.points:
-                if not _draw_note_image(image, note.kind, point, columns, skin):
-                    _draw_note_bar(draw, point, NOTE_COLORS[note.kind], columns)
+        if note.kind != "Hold":
+            continue
+        if hold_overlay is None:
+            hold_overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        _draw_hold_polygon(ImageDraw.Draw(hold_overlay), note, columns, skin)
     if hold_overlay is not None:
         image.paste(hold_overlay, (0, 0), hold_overlay)
+    for note in notes:
+        if note.kind == "Hold":
+            continue
+        for point in note.points:
+            if not _draw_note_image(image, note.kind, point, columns, skin):
+                _draw_note_bar(draw, point, NOTE_COLORS[note.kind], columns)
 
 
 def _note_pixel_width(width: float) -> float:
