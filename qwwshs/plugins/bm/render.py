@@ -949,7 +949,6 @@ CARD2_RATING_BADGE_H = CARD2_NAME_BAR_H // 2  # Rating 徽章高 = 名字条 1/2
 CARD2_RATING_BADGE = (255, 24, 48)  # Rating 徽章颜色 #FF1830
 CARD2_RATING_FONT = CARD2_RATING_BADGE_H * 3 // 5  # Rating 徽章字
 CARD2_ICON_TEXT_MIN_FONT = 20  # 图标内文字自动缩放下限
-CARD2_MATRIX_GAP = 24  # 等级矩阵与头部图标行下缘的间距
 
 _FMT_K_THRESHOLD = 10000  # 数量 ≥ 此值用 K 显示（个十百省略）
 _ICON_CROP_ALPHA = 64  # 图标裁掉透明边的 alpha 阈值
@@ -1356,7 +1355,7 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
 
     头部：左上角角色头像（按存档 CharSelect 选择）+ 名字条（玩家名居中），
     名字条右下角 Rating 徽章，名字条右侧光锥琥珀/珂灵币条（高度与名字条相同，
-    图标内左半写名称、右半写数量），右上角等级分布表；B30/N10 网格（每行 5 首）。
+    图标内左半写名称、右半写数量），玩家名下方等级分布表；B30/N10 网格（每行 5 首）。
     """
     card_w = CARD2_PLATE_W
     width = CARD2_PER_ROW * card_w + (CARD2_PER_ROW - 1) * CARD2_GAP + 2 * CARD2_PAD
@@ -1365,12 +1364,8 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     grid_h = CARD2_PLATE_H + CARD2_GAP
     section_h = 24 + 34 + 14
     matrix_h = (1 + len(GRADES)) * 44 + 2 * CARD2_MATRIX_PAD
-    matrix_y = (
-        CARD2_AVATAR_TOP
-        + (CARD2_AVATAR - CARD2_NAME_BAR_H) // 2
-        + CARD2_NAME_BAR_H
-        + CARD2_MATRIX_GAP
-    )
+    # 等级矩阵：玩家名（名字条）下方，左对齐（避开左侧头像）
+    matrix_y = CARD2_AVATAR_TOP + CARD2_AVATAR + CARD2_MATRIX_PAD
     header_h = max(
         CARD2_AVATAR_TOP + CARD2_AVATAR,
         matrix_y + matrix_h - CARD2_MATRIX_PAD,
@@ -1513,8 +1508,8 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
         )
         prev_right = icon_x + icon_w
         prev_w = icon_w
-    # 等级分布：图标行下方（保持右对齐）
-    _draw_grade_matrix(img, draw, matrix_y, grade_counts, right=width - CARD2_PAD)
+    # 等级分布：玩家名下方（左对齐）
+    _draw_grade_matrix(img, draw, matrix_y, grade_counts)
 
     y = header_h + 24
 
