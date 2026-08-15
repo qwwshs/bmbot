@@ -937,7 +937,7 @@ CARD2_DIVIDER = (70, 70, 70)
 CARD2_ACCENT = (220, 220, 220)
 
 # 头部：角色头像 + 名字条 + Rating 徽章
-CARD2_AVATAR = 160  # 头像边长（原 320 的 1/2）
+CARD2_AVATAR = 240  # 头像边长（原 160 的 1.5 倍）
 CARD2_AVATAR_X = CARD2_AVATAR // 4  # 头像右移 1/4
 CARD2_AVATAR_TOP = CARD2_AVATAR // 4  # 头像顶部边距
 CARD2_NAME_BAR_H = CARD2_AVATAR // 2  # 名字条高度 = 头像 1/2
@@ -948,6 +948,9 @@ CARD2_RATING_BADGE_W = CARD2_NAME_BAR_W // 5  # Rating 徽章宽 = 名字条 1/5
 CARD2_RATING_BADGE_H = CARD2_NAME_BAR_H // 2  # Rating 徽章高 = 名字条 1/2
 CARD2_RATING_BADGE = (255, 24, 48)  # Rating 徽章颜色 #FF1830
 CARD2_RATING_FONT = CARD2_RATING_BADGE_H * 3 // 5  # Rating 徽章字
+CARD2_ICON_TEXT_MIN_FONT = 20  # 图标内文字自动缩放下限
+
+_FMT_K_THRESHOLD = 10000  # 数量 ≥ 此值用 K 显示（个十百省略）
 CARD2_MATRIX_PAD = 8  # 等级分布黑底白框内边距
 
 
@@ -1329,6 +1332,15 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     return y + rows * (CARD2_PLATE_H + CARD2_GAP)
 
 
+def _fmt_count(count: object) -> str:
+    """光锥琥珀/珂灵币数量格式化：≥10000 用 K（个十百省略），如 10000 -> 10K。"""
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return str(count)
+    return f"{n // 1000}K" if n >= _FMT_K_THRESHOLD else str(n)
+
+
 def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     player_name: str,
     result: RatingResult,
@@ -1341,8 +1353,8 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     """渲染新版查分卡，返回 PNG 字节。
 
     头部：左上角角色头像（按存档 CharSelect 选择）+ 名字条（玩家名居中），
-    名字条右下角 Rating 徽章，玩家名下方光锥琥珀/珂灵币条（居中数字），
-    右上角等级分布表；B30/N10 网格（每行 5 首）。
+    名字条右下角 Rating 徽章，名字条右侧光锥琥珀/珂灵币条（高度与名字条相同，
+    图标内左半写名称、右半写数量），右上角等级分布表；B30/N10 网格（每行 5 首）。
     """
     card_w = CARD2_PLATE_W
     width = CARD2_PER_ROW * card_w + (CARD2_PER_ROW - 1) * CARD2_GAP + 2 * CARD2_PAD
@@ -1437,28 +1449,57 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
         fill=(255, 255, 255),
         anchor="mm",
     )
-    # 光锥琥珀 / 珂灵币：玩家名下方一点，图标条 + 居中数字
-    name_cx = int((name_mid + CARD2_NAME_BAR_W) / 2)
-    coin_y = bar_bottom + 8
-    for icon_name, count in (("光锥琥珀 1.png", glass), ("珂灵币 1.png", coin)):
+    # 光锥琥珀 / 珂灵币：名字条右侧（高度 = 名字条高度，保持比例），
+    # 图标内左半写名称、右半写数量（≥10000 用 K），字符高 = 图标高 1/2
+    prev_right = CARD2_NAME_BAR_W
+    prev_w = 0
+    for icon_name, label, count in (
+        ("光锥琥珀 1.png", "光锥琥珀", glass),
+        ("珂灵币 1.png", "珂灵币", coin),
+    ):
         if count is None:
             continue
         icon = _load_ui_texture(icon_name)
         if icon is None:
             continue
-        icon_h = 44
+        icon_h = CARD2_NAME_BAR_H
         icon_w = max(1, round(icon.width * icon_h / icon.height))
         icon = icon.resize((icon_w, icon_h), Image.Resampling.LANCZOS)
-        icon_x = name_cx - icon_w // 2
-        img.paste(icon, (icon_x, coin_y), icon)
+        icon_x = prev_right + (icon_w // 2 if prev_w == 0 else prev_w // 8)
+        img.paste(icon, (icon_x, bar_top), icon)
+        half_w = icon_w // 2
+        mid_x = icon_x + half_w
+        # 左半：名称（字符高 = 图标高 1/2，半宽放不下时缩小）
+        label_font = CARD2_NAME_BAR_H // 2
+        while (
+            label_font > CARD2_ICON_TEXT_MIN_FONT
+            and draw.textlength(label, font=_font(label_font, bold=True)) > half_w
+        ):
+            label_font -= 2
         draw.text(
-            (icon_x + icon_w // 2, coin_y + icon_h // 2),
-            f"{count}",
-            font=_font(26, bold=True),
+            (icon_x + half_w // 2, bar_top + icon_h // 2),
+            label,
+            font=_font(label_font, bold=True),
             fill=(255, 255, 255),
             anchor="mm",
         )
-        coin_y += icon_h + 8
+        # 右半：数量（字符高 = 图标高 1/2，半宽放不下时缩小）
+        count_font = CARD2_NAME_BAR_H // 2
+        text = _fmt_count(count)
+        while (
+            count_font > CARD2_ICON_TEXT_MIN_FONT
+            and draw.textlength(text, font=_font(count_font, bold=True)) > half_w
+        ):
+            count_font -= 2
+        draw.text(
+            (mid_x + half_w // 2, bar_top + icon_h // 2),
+            text,
+            font=_font(count_font, bold=True),
+            fill=(255, 255, 255),
+            anchor="mm",
+        )
+        prev_right = icon_x + icon_w
+        prev_w = icon_w
     # 等级分布：右上角（保持大小）
     _draw_grade_matrix(
         img, draw, CARD2_AVATAR_TOP, grade_counts, right=width - CARD2_PAD
