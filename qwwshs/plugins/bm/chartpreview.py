@@ -127,7 +127,10 @@ def parse_chart(path: Path) -> ChartData:
         chart.charter = meta["Charter"]
 
     bpm_changes = _parse_bpm_changes(sections.get("speed", []))
-    changes = sorted(dict(bpm_changes).items())
+    # 过滤 0/负 BPM（防除零），同拍去重保留最后一条
+    changes = sorted(
+        (beat, bpm) for beat, bpm in dict(bpm_changes).items() if bpm > 0
+    )
     try:
         default_bpm = float(info.get("BpmText") or _DEFAULT_BPM)
     except ValueError:
@@ -216,19 +219,26 @@ def _parse_black_lines(
             if curve:
                 out.append(curve)
             continue
-        match = re.match(r"BlackLine:\s*([\d.]+)\s*,\s*(-?[\d.]+)(.*)", stmt)
+        match = re.match(
+            r"BlackLine:\s*([\d.]+(?:[eE][+-]?\d+)?)\s*,\s*"
+            r"(-?[\d.]+(?:[eE][+-]?\d+)?)(.*)",
+            stmt,
+        )
         if not match:
             continue
         # 简单线后跟 :[ 公式块 = 该线的动画版本：用公式曲线代替静态折线
         block_start = re.search(r":\s*\[", stmt)
         if block_start:
             curve = _eval_black_line_block(
-                "BlackLine::[" + stmt[block_start.end() :]
+                "BlackLine::[" + stmt[block_start.end() :],
+                bpm_changes,
+                default_bpm,
             )
             if curve and "Move_Y" in stmt[block_start.end() :]:
                 out.append(curve)
                 continue
-        body = re.split(r":\s*[\[{]", match.group(3), maxsplit=1)[0]
+        # 值列表到第一个冒号为止（可能跟 :{...} / :[...] / 孤立冒号）
+        body = re.split(r":", match.group(3), maxsplit=1)[0]
         points = [(float(match.group(1)), float(match.group(2)))]
         rest = [float(v) for v in body.split(",") if v.strip()]
         points.extend((rest[i], rest[i + 1]) for i in range(0, len(rest) - 1, 2))
@@ -635,7 +645,7 @@ def _beat_to_time(
 ) -> float:
     """把拍数换算为秒（按 BpmChange 分段积分）。"""
     total = 0.0
-    prev_beat, prev_bpm = 0.0, default_bpm
+    prev_beat, prev_bpm = 0.0, default_bpm if default_bpm > 0 else _DEFAULT_BPM
     for beat_at, bpm in changes:
         if beat <= beat_at:
             break
