@@ -483,6 +483,7 @@ _HELP_TEXT = (
     "      点右上角分享 → 纯文本 → 导出并发送\n"
     "   ④ vivo/iQOO：复制存档进原子笔记/备忘录，点右上角 →\n"
     "      导出文件 → 文本，成功后点分享发到群里\n"
+    "   ⑤ OPPO：导出方法同①安卓通用法\n"
     "   内容：从 <RSAKeyValue> 开始的完整存档（FormalSave.txt），\n"
     "   或已解密的 JSON 文本\n"
     "/bmrating — 以图片输出你的 Rating 查分\n"
@@ -527,6 +528,7 @@ async def handle_bind(event: MessageEvent) -> None:
         "② 游戏内导出：切换角色为克莱因 → 导出存档 → 放入 txt 文件发送\n"
         "③ iOS：复制存档到 Pages → 分享 → 纯文本 → 导出并发送\n"
         "④ vivo/iQOO：复制进原子笔记 → 导出文件 → 文本 → 分享到本群\n"
+        "⑤ OPPO：导出方法同①安卓通用法\n"
         "（内容为从 <RSAKeyValue> 开始的完整存档，或已解密的 JSON 文本）"
     )
 
