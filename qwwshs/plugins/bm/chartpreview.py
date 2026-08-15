@@ -15,6 +15,7 @@ import io
 import math
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
@@ -87,6 +88,7 @@ class ChartData:
     artist: str = ""
     charter: str = ""
     level: str = ""
+    dlevel: str = ""  # 定数（chart/Info 对照表中的 DLevel）
     notes: list[Note] = field(default_factory=list)
     # 黑线（#anim 的 BlackLine）：每条为 (时间秒, x) 折线
     black_lines: list[list[tuple[float, float]]] = field(default_factory=list)
@@ -114,6 +116,15 @@ def parse_chart(path: Path) -> ChartData:
     chart.artist = info.get("Artist") or ""
     chart.charter = info.get("Charter") or ""
     chart.level = info.get("Level") or ""
+
+    # 曲目↔谱面对照（chart/Info）：补定数与规范谱师
+    name_parts = path.name.rsplit(" ", 1)
+    stem = name_parts[0]
+    diff = name_parts[1].removesuffix(".txt") if len(name_parts) > 1 else ""
+    meta = load_song_info().get((stem, diff), {})
+    chart.dlevel = meta.get("DLevel") or ""
+    if meta.get("Charter"):
+        chart.charter = meta["Charter"]
 
     bpm_changes = _parse_bpm_changes(sections.get("speed", []))
     changes = sorted(dict(bpm_changes).items())
@@ -208,7 +219,16 @@ def _parse_black_lines(
         match = re.match(r"BlackLine:\s*([\d.]+)\s*,\s*(-?[\d.]+)(.*)", stmt)
         if not match:
             continue
-        body = re.split(r":\{", match.group(3), maxsplit=1)[0]
+        # 简单线后跟 :[ 公式块 = 该线的动画版本：用公式曲线代替静态折线
+        block_start = re.search(r":\s*\[", stmt)
+        if block_start:
+            curve = _eval_black_line_block(
+                "BlackLine::[" + stmt[block_start.end() :]
+            )
+            if curve and "Move_Y" in stmt[block_start.end() :]:
+                out.append(curve)
+                continue
+        body = re.split(r":\s*[\[{]", match.group(3), maxsplit=1)[0]
         points = [(float(match.group(1)), float(match.group(2)))]
         rest = [float(v) for v in body.split(",") if v.strip()]
         points.extend((rest[i], rest[i + 1]) for i in range(0, len(rest) - 1, 2))
@@ -271,94 +291,120 @@ def _ease_in(kind: str, t: float) -> float:  # noqa: PLR0911
     return 1 - math.sqrt(1 - t * t)  # Circ
 
 
-def _eval_formula(text: str, env: dict[str, float]) -> float:
-    """求值公式表达式（数字/变量/四则/函数调用）。"""
+# 表达式节点：("num", v) / ("var", n) / ("op", op, l, r) / ("neg", n) /
+# ("call", name, [args])
+_Node = tuple
+
+
+def _compile_expr(text: str) -> _Node:
+    """编译公式表达式为 AST（tokenize 一次，之后按采样点直接求值）。"""
     tokens = re.findall(r"\d+\.?\d*|\.\d+|[a-zA-Z_][a-zA-Z0-9_]*|[+\-*/%^(),]", text)
-    parser = _FormulaParser(tokens, env)
-    value = parser.parse()
+    parser = _FormulaParser(tokens)
+    node = parser.parse()
     if parser.pos != len(tokens):
         raise _FormulaError(f"公式末尾有多余内容: {text!r}")  # noqa: TRY003
-    return value
+    return node
+
+
+def _eval_formula(text: str, env: dict[str, float]) -> float:
+    """编译并求值公式表达式（数字/变量/四则/函数调用）。"""
+    return _eval_node(_compile_expr(text), env)
+
+
+def _eval_node(node: _Node, env: dict[str, float]) -> float:  # noqa: PLR0911
+    """按环境求值已编译的 AST。"""
+    kind = node[0]
+    if kind == "num":
+        return node[1]
+    if kind == "var":
+        return env[node[1]]
+    if kind == "neg":
+        return -_eval_node(node[1], env)
+    if kind == "op":
+        op, left, right = node[1], _eval_node(node[2], env), _eval_node(node[3], env)
+        if op == "+":
+            return left + right
+        if op == "-":
+            return left - right
+        if op == "*":
+            return left * right
+        if op == "/":
+            return left / right
+        if op == "%":
+            return left % right
+        return math.pow(left, right)
+    name, args = node[1], [_eval_node(arg, env) for arg in node[2]]
+    return _call_function(name, args)
 
 
 class _FormulaParser:
-    """递归下降表达式解析器。"""
+    """递归下降表达式解析器（编译为 AST）。"""
 
-    def __init__(self, tokens: list[str], env: dict[str, float]) -> None:
+    def __init__(self, tokens: list[str]) -> None:
         self.tokens = tokens
         self.pos = 0
-        self.env = env
 
-    def parse(self) -> float:
+    def parse(self) -> _Node:
         return self._expr()
 
     def _peek(self) -> str | None:
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None
 
-    def _expr(self) -> float:
-        value = self._term()
+    def _expr(self) -> _Node:
+        node = self._term()
         while self._peek() in ("+", "-"):
             op = self.tokens[self.pos]
             self.pos += 1
-            right = self._term()
-            value = value + right if op == "+" else value - right
-        return value
+            node = ("op", op, node, self._term())
+        return node
 
-    def _term(self) -> float:
-        value = self._unary()
+    def _term(self) -> _Node:
+        node = self._unary()
         while self._peek() in ("*", "/", "%"):
             op = self.tokens[self.pos]
             self.pos += 1
-            right = self._unary()
-            if op == "*":
-                value *= right
-            elif op == "/":
-                value /= right
-            else:
-                value %= right
-        return value
+            node = ("op", op, node, self._unary())
+        return node
 
-    def _unary(self) -> float:
+    def _unary(self) -> _Node:
         if self._peek() in ("+", "-"):
             op = self.tokens[self.pos]
             self.pos += 1
-            value = self._unary()
-            return value if op == "+" else -value
+            node = self._unary()
+            return node if op == "+" else ("neg", node)
         return self._power()
 
-    def _power(self) -> float:
+    def _power(self) -> _Node:
         base = self._atom()
         if self._peek() in ("^", "**"):
             self.pos += 1
-            return math.pow(base, self._power())
+            return ("op", "^", base, self._power())
         return base
 
-    def _atom(self) -> float:
+    def _atom(self) -> _Node:
         token = self._peek()
         if token is None:
             raise _FormulaError("公式意外结束")
         if token[0].isdigit() or token[0] == ".":
             self.pos += 1
-            return float(token)
+            return ("num", float(token))
         if token == "(":
             self.pos += 1
-            value = self._expr()
+            node = self._expr()
             if self._peek() != ")":
                 raise _FormulaError("缺少右括号")
             self.pos += 1
-            return value
+            return node
         if token[0].isalpha():
             self.pos += 1
             if self._peek() == "(":
                 return self._call(token)
-            if token in self.env:
-                return self.env[token]
-            raise _FormulaError(f"未定义变量 {token}")  # noqa: TRY003
+            return ("var", token)
         raise _FormulaError(f"无法识别的符号 {token!r}")  # noqa: TRY003
 
-    def _call(self, name: str) -> float:
+    def _call(self, name: str) -> _Node:
         self.pos += 1  # 跳过 (
-        args: list[float] = []
+        args: list[_Node] = []
         if self._peek() != ")":
             while True:
                 args.append(self._expr())
@@ -368,7 +414,7 @@ class _FormulaParser:
         if self._peek() != ")":
             raise _FormulaError(f"函数 {name} 缺少右括号")  # noqa: TRY003
         self.pos += 1
-        return _call_function(name, args)
+        return ("call", name, args)
 
 
 _FUNCTIONS: dict[str, Callable[..., float]] = {}
@@ -503,21 +549,27 @@ def _eval_black_line_block(
     y 为相对 Move_Y 的拍数偏移，x 为相对 Move_X 的横向偏移；
     ``$ Mirror`` 时 x 取反。
     """
-    match = re.match(
-        r"BlackLine::\[\s*(.*?)\](?::\{.*?\})?\s*;", stmt, flags=re.DOTALL
-    )
-    if not match:
+    start = stmt.find("[")
+    end = stmt.find("]", start + 1)
+    if start == -1 or end == -1:
         return None
-    statements = _parse_block_statements(match.group(1))
+    statements = _parse_block_statements(stmt[start + 1 : end])
     if not statements:
         return None
-    freq = _block_freq(statements)
+    # 编译一次，采样时直接求值 AST（避免每个采样点重复分词/解析）
+    try:
+        compiled = [
+            (name, _compile_expr(expr) if expr else None) for name, expr in statements
+        ]
+    except _FormulaError:
+        return None
+    freq = _block_freq(compiled)
     sample_count = max(_MIN_SAMPLES, min(int(freq), _MAX_SAMPLES))
 
     points: list[tuple[float, float]] = []
     for i in range(sample_count + 1):
         point = _sample_black_line(
-            statements,
+            compiled,
             i / sample_count,
             freq,
             bpm_changes,
@@ -541,19 +593,19 @@ def _parse_block_statements(text: str) -> list[tuple[str, str]]:
     return statements
 
 
-def _block_freq(statements: list[tuple[str, str]]) -> float:
+def _block_freq(compiled: list[tuple[str, _Node | None]]) -> float:
     """读取 $ Freq（采样点频率），缺省 100。"""
-    for name, expr in statements:
-        if name == "Freq" and expr:
+    for name, node in compiled:
+        if name == "Freq" and node is not None:
             try:
-                return float(_eval_formula(expr, {"delta": 0.0}))
+                return float(_eval_node(node, {"delta": 0.0}))
             except (ValueError, ZeroDivisionError):
                 return _DEFAULT_SAMPLES
     return _DEFAULT_SAMPLES
 
 
 def _sample_black_line(
-    statements: list[tuple[str, str]],
+    compiled: list[tuple[str, _Node | None]],
     delta: float,
     freq: float,
     bpm_changes: list[tuple[float, float]],
@@ -563,12 +615,12 @@ def _sample_black_line(
     env = {"delta": delta, "Freq": freq, "Move_X": 0.0, "Move_Y": 0.0}
     mirror = False
     try:
-        for name, expr in statements:
-            if not expr:
+        for name, node in compiled:
+            if node is None:
                 if name == "Mirror":
                     mirror = True
                 continue
-            env[name] = _eval_formula(expr, env)
+            env[name] = _eval_node(node, env)
     except (ValueError, ZeroDivisionError):
         return None
     beat = env.get("Move_Y", 0.0) + env.get("y", 0.0)
@@ -635,14 +687,16 @@ def _locate_chart(
 
 
 def _chart_file(song: str, diff: str) -> tuple[Path, str] | None:
-    """查找 ``chart/<曲名> <难度>``，直接路径优先，索引（小写）兜底。"""
-    direct = CHART_DIR / f"{song} {diff}"
-    if direct.exists():
-        return direct, diff
+    """查找 ``chart/<曲名> <难度>[.txt]``，直接路径优先，索引（小写）兜底。"""
+    for suffix in ("", ".txt"):
+        direct = CHART_DIR / f"{song} {diff}{suffix}"
+        if direct.exists():
+            return direct, diff
     index = _chart_index()
     for candidate in (song, *_name_variants(song)):
         for filename in index.get(candidate.lower(), []):
-            if filename.endswith(f" {diff}"):
+            base = filename[:-4] if filename.lower().endswith(".txt") else filename
+            if base.endswith(f" {diff}"):
                 return CHART_DIR / filename, diff
     return None
 
@@ -658,6 +712,50 @@ def _chart_index() -> dict[str, list[str]]:
         stem = path.name.rsplit(" ", 1)[0]
         index.setdefault(stem.lower(), []).append(path.name)
     return index
+
+
+# ---------- 曲目↔谱面对照（chart/Info） ----------
+
+
+@lru_cache(maxsize=1)
+def load_song_info() -> dict[tuple[str, str], dict[str, str]]:
+    """解析 ``chart/Info``（Song::/Chart:: 对照，含定数/等级/谱师）。
+
+    键为 ``(曲目内部名, 难度)``，值为 ``{title, artist, level, dlevel,
+    charter, color}``。文件缺失时返回空 dict。
+    """
+    data: dict[tuple[str, str], dict[str, str]] = {}
+    path = CHART_DIR / "Info"
+    if not path.exists():
+        return data
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    current_song = ""
+    for block in re.finditer(
+        r"(Song|Chart)::\s*\{\s*(.*?)\s*\};", text, flags=re.DOTALL
+    ):
+        kind, body = block.group(1), block.group(2)
+        fields = _parse_info_fields(body)
+        if kind == "Song":
+            current_song = fields.get("Path", "")
+            if current_song:
+                data.setdefault((current_song, ""), fields)
+            continue
+        diff = fields.get("Path", "").upper()
+        if current_song and diff:
+            data[(current_song, diff)] = fields
+    return data
+
+
+def _parse_info_fields(body: str) -> dict[str, str]:
+    """解析 Info 块内的 ``$ Key = Value`` 字段（一行可多个，值可带引号）。"""
+    fields: dict[str, str] = {}
+    for match in re.finditer(
+        r"\$\s*([A-Za-z_]\w*)\s*=\s*(?:\"([^\"]*)\"|([^$\n;]+))", body
+    ):
+        name = match.group(1)
+        value = (match.group(2) or match.group(3) or "").strip().rstrip(",")
+        fields[name] = value
+    return fields
 
 
 def _name_variants(name: str) -> list[str]:
@@ -698,10 +796,11 @@ def _draw_title(
     font_title = _font(26, bold=True)
     font_sub = _font(16)
     draw.text((_EDGE_PAD, 14), display_name, font=font_title, fill=_TITLE_COLOR)
-    meta = (
-        f"{chart.charter} | Level {chart.level} | "
-        f"时长 {chart.duration / 60:.1f} 分钟"
-    )
+    duration_text = f"时长 {chart.duration / 60:.1f} 分钟"
+    if chart.dlevel:
+        meta = f"{chart.charter} | 定数 {chart.dlevel} | {duration_text}"
+    else:
+        meta = f"{chart.charter} | Level {chart.level} | {duration_text}"
     draw.text(
         (width - _EDGE_PAD, 22),
         meta,
