@@ -20,9 +20,14 @@ from typing import Callable
 
 from PIL import Image, ImageDraw
 
+from .constants import get_song_constants
 from .render import _font
+from .song import search_songs
 
 CHART_DIR = Path(__file__).resolve().parent / "chart"
+
+# 谱面难度优先级（缺省按定数最高选，无定数信息时按此顺序兜底）
+_CHART_DIFFS = ("RU", "TT", "IL", "RL", "DM", "FL")
 
 # 音符类型 → 颜色（Tap 蓝 / Drag 黄 / Hold 红）
 NOTE_COLORS = {
@@ -588,24 +593,66 @@ def _beat_to_time(
     return total
 
 
-def find_chart(name: str) -> tuple[Path, str] | None:
-    """按曲名查找谱面文件，返回 (路径, 难度)。大小写不敏感。"""
-    diffs = ("RU", "TT", "IL", "RL", "DM", "FL")
-    candidates = [f"{name} {diff}" for diff in diffs]
-    candidates += [
-        f"{variant} {diff}" for diff in diffs for variant in _name_variants(name)
-    ]
-    lowered = {candidate.lower() for candidate in candidates}
-    for candidate in candidates:
-        path = CHART_DIR / candidate
-        if path.exists():
-            return path, candidate.rsplit(" ", 1)[-1]
-    if not CHART_DIR.is_dir():
-        return None
-    for path in CHART_DIR.iterdir():
-        if path.is_file() and path.name.lower() in lowered:
-            return path, path.name.rsplit(" ", 1)[-1]
+def find_chart(name: str, diff: str | None = None) -> tuple[Path, str] | None:
+    """按 bmsong 同款检索解析曲名，再按难度定位谱面文件。
+
+    ``diff`` 缺省时选已收录难度中定数最高的（无定数信息则按文件顺序）。
+    """
+    constants = get_song_constants()
+    names = search_songs(constants, name) or [name]
+    for canonical in names:
+        result = _locate_chart(constants, canonical, diff)
+        if result is not None:
+            return result
     return None
+
+
+def _locate_chart(
+    constants: dict[str, dict], song: str, diff: str | None
+) -> tuple[Path, str] | None:
+    """按难度在 chart/ 下定位谱面文件（大小写不敏感索引兜底）。"""
+    if diff is not None:
+        diff = diff.upper()
+        if diff not in _CHART_DIFFS:
+            return None
+        return _chart_file(song, diff)
+    entry = constants.get(song) or {}
+    ordered = sorted(
+        (d for d in _CHART_DIFFS if float(entry.get(d) or 0) > 0),
+        key=lambda d: float(entry[d]),
+        reverse=True,
+    )
+    for d in ordered + [d for d in _CHART_DIFFS if d not in ordered]:
+        result = _chart_file(song, d)
+        if result is not None:
+            return result
+    return None
+
+
+def _chart_file(song: str, diff: str) -> tuple[Path, str] | None:
+    """查找 ``chart/<曲名> <难度>``，直接路径优先，索引（小写）兜底。"""
+    direct = CHART_DIR / f"{song} {diff}"
+    if direct.exists():
+        return direct, diff
+    index = _chart_index()
+    for candidate in (song, *_name_variants(song)):
+        for filename in index.get(candidate.lower(), []):
+            if filename.endswith(f" {diff}"):
+                return CHART_DIR / filename, diff
+    return None
+
+
+def _chart_index() -> dict[str, list[str]]:
+    """chart/ 下所有谱面文件名（去难度、小写）→ 文件名列表。"""
+    index: dict[str, list[str]] = {}
+    if not CHART_DIR.is_dir():
+        return index
+    for path in CHART_DIR.iterdir():
+        if not path.is_file():
+            continue
+        stem = path.name.rsplit(" ", 1)[0]
+        index.setdefault(stem.lower(), []).append(path.name)
+    return index
 
 
 def _name_variants(name: str) -> list[str]:

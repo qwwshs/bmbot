@@ -505,7 +505,7 @@ _HELP_TEXT = (
     "/bmchartlist <定数1> [定数2] [难度...] — 按定数区间生成定数表图\n"
     "   13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
     "/bmrandom <定数1> [定数2] [难度...] — 在定数区间内随机挑一首曲目\n"
-    "/bmchart <曲名> — 生成谱面预览图（每分钟一段，目前仅 RU 难度）\n"
+    "/bmchart <曲名> [难度] — 生成谱面预览图（每分钟一段，难度可省）\n"
     "/bmbotversion — 查看 bot 版本\n"
     "━━━━━━━━━━━━━━━━━━\n"
     "📱 存档位置：/Android/data/com.skywaystudio.BerryMelody/files/FormalSave.txt"
@@ -1468,22 +1468,25 @@ async def handle_chart(arg: Message = CommandArg()) -> None:
 
 @bm_chart_preview.handle()
 async def handle_chart_preview(arg: Message = CommandArg()) -> None:
-    """生成谱面预览图（/bmchart <曲名>，目前仅 RU 难度谱面）。"""
-    query = arg.extract_plain_text().strip()
-    if not query:
+    """生成谱面预览图（/bmchart <曲名> [难度]）。"""
+    parts = arg.extract_plain_text().split()
+    if not parts:
         await bm_chart_preview.finish(
-            "用法：/bmchart <曲名>\n例如：/bmchart ether vortex\n"
-            "（目前仅有 RU 难度的谱面文件）"
+            "用法：/bmchart <曲名> [难度]\n"
+            "例如：/bmchart ether vortex\n/bmchart fallen angel tt\n"
+            "难度可省（缺省选该曲定数最高的难度）；支持 RL/IL/TT/RU"
         )
-    found = await asyncio.to_thread(find_chart, query)
+    query = parts[0]
+    diff = parts[1] if len(parts) > 1 else None
+    found = await asyncio.to_thread(find_chart, query, diff)
     if found is None:
-        await bm_chart_preview.finish("❌ 未找到该曲目的谱面文件（目前仅有 RU 难度）")
-    path, diff = found
+        await bm_chart_preview.finish("❌ 未找到该曲目的谱面文件")
+    path, found_diff = found
     chart = await asyncio.to_thread(parse_chart, path)
     if not chart.notes:
         await bm_chart_preview.finish("❌ 谱面中没有音符数据")
     img_bytes = await asyncio.to_thread(
-        render_chart_preview, chart, f"{query} ({diff})"
+        render_chart_preview, chart, f"{query} ({found_diff})"
     )
     await bm_chart_preview.finish(MessageSegment.image(img_bytes))
 
