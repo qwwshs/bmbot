@@ -1479,7 +1479,15 @@ async def handle_random(arg: Message = CommandArg()) -> None:
     if not charts:
         await bm_random.finish("❌ 该范围内没有符合条件的曲目")
     constant, song, diff = random.choice(charts)
-    await bm_random.finish(f"🎲 {_display_name(song)}（{diff} {constant:.1f}）")
+    text = f"🎲 {_display_name(song)}（{diff} {constant:.1f}）"
+    cover = find_cover(song, SONG_CONSTANTS[song])
+    if cover is not None:
+        # 以字节发送（base64），远程部署时协议端无法访问服务器本地路径
+        cover_bytes = await asyncio.to_thread(cover.read_bytes)
+        await bm_random.finish(
+            MessageSegment.text(text) + MessageSegment.image(cover_bytes)
+        )
+    await bm_random.finish(text)
 
 
 @bm_rating_style.handle()
