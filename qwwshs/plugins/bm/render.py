@@ -170,30 +170,35 @@ _FONT_CANDIDATES = [
 ]
 
 
-@lru_cache(maxsize=1)
-def _regular_font_path() -> str | None:
-    """fonts/ 下 Regular 字重字体文件（如 BM_NEOType-Regular.ttf）。"""
+@lru_cache(maxsize=8)
+def _variant_font_path(variant: str) -> str | None:
+    """fonts/ 下指定字重字体文件（如 BM_NEOType-Medium.ttf）。"""
     for ext in ("*.otf", "*.ttf", "*.ttc", "*.otc"):
         for path in sorted(_FONT_DIR.glob(ext)):
-            if "regular" in path.stem.lower():
+            if variant in path.stem.lower():
                 return str(path)
     return None
 
 
 def _font(
-    size: int, *, bold: bool = False, regular: bool = False
+    size: int, *, bold: bool = False, regular: bool = False, medium: bool = False
 ) -> ImageFont.FreeTypeFont:
-    key = (size, bold, regular)
+    key = (size, bold, regular, medium)
     if key not in _font_cache:
-        # 打包字体优先（仅一个字重，粗体/常规共用；regular=True 时用 Regular 文件）
+        # 打包字体优先（仅一个字重，粗体/常规共用；
+        # medium/regular=True 时用对应字重文件）
         bundled = _bundled_font_path()
         if bundled is not None:
             try:
                 path, index = bundled
-                if regular:
-                    reg = _regular_font_path()
-                    if reg is not None:
-                        path, index = reg, 0
+                if medium:
+                    variant = _variant_font_path("medium")
+                elif regular:
+                    variant = _variant_font_path("regular")
+                else:
+                    variant = None
+                if variant is not None:
+                    path, index = variant, 0
                 _font_cache[key] = ImageFont.truetype(path, size, index=index)
                 return _font_cache[key]
             except OSError:
@@ -1454,13 +1459,13 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     name = _ellipsize(
         draw,
         player_name,
-        _font(CARD2_NAME_FONT, regular=True),
+        _font(CARD2_NAME_FONT, medium=True),
         CARD2_NAME_BAR_W - name_mid - 16,
     )
     draw.text(
         ((name_mid + CARD2_NAME_BAR_W) / 2, (bar_top + bar_bottom) / 2),
         name,
-        font=_font(CARD2_NAME_FONT, regular=True),
+        font=_font(CARD2_NAME_FONT, medium=True),
         fill=(255, 255, 255),
         anchor="mm",
     )
@@ -1494,7 +1499,7 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     draw.text(
         (badge_x + CARD2_RATING_BADGE_W // 2, badge_y + CARD2_RATING_BADGE_H // 2),
         f"{result.rating:.2f}",
-        font=_font(CARD2_RATING_FONT, regular=True),
+        font=_font(CARD2_RATING_FONT, medium=True),
         fill=(255, 255, 255),
         anchor="mm",
     )
