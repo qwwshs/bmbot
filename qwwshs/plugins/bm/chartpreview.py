@@ -138,8 +138,8 @@ _MIN_NOTE_PIXELS = 2
 _ALPHA_THRESHOLD = 100
 # Tap/Drag 素材渲染的固定高度（像素，游戏里高度不随宽度变化）
 _NOTE_FIXED_HEIGHT = round(8 * 4 / 3)  # 8px 放大 1/3
-# Slide（Hold）透明度（0-255，191 = 75%）
-_HOLD_ALPHA = round(255 * 0.75)
+# Slide（Hold）透明度（0-255，128 = 50%）
+_HOLD_ALPHA = round(255 * 0.5)
 
 _DEFAULT_BPM = 120.0
 # 结尾超出分钟分界的容差（秒），超出视为需要新一栏
