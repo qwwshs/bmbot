@@ -1351,12 +1351,11 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
         fill=CARD2_TEXT,
         anchor="ma",
     )
-    # 标题左侧显示 rating 占比数字（BM_NEOType-Medium，与标题垂直居中）
+    # 标题右侧显示 rating 占比数字（图片 3/4 位置，BM_NEOType-Medium，与标题垂直居中）
     if share:
         share_font = _font(40, medium=True)
-        title_w = draw.textlength(title, font=_font(CARD2_SECTION_TITLE, bold=True))
         draw.text(
-            (img.width / 2 - title_w / 2 - 24, y + CARD2_SECTION_TITLE // 2),
+            (img.width * 3 // 4, y + CARD2_SECTION_TITLE // 2),
             share,
             font=share_font,
             fill=CARD2_TEXT,
