@@ -136,6 +136,8 @@ _NOTE_THICKNESS = 7
 _MIN_NOTE_PIXELS = 2
 # 素材主色统计时视为不透明的 alpha 下限
 _ALPHA_THRESHOLD = 100
+# Tap/Drag 素材渲染的固定高度（像素，游戏里高度不随宽度变化）
+_NOTE_FIXED_HEIGHT = 8
 # Slide（Hold）透明度（0-255，191 = 75%）
 _HOLD_ALPHA = round(255 * 0.75)
 
@@ -1123,8 +1125,8 @@ def _draw_notes(
 
 
 def _note_pixel_width(width: float) -> float:
-    """音符宽度值（x2）→ 像素宽。"""
-    return max(1.0, width * (_COLUMN_WIDTH - 2 * _LANE_PAD) / 2)
+    """音符宽度值（x2）→ 像素宽（x2=1 占满整个轨道）。"""
+    return max(1.0, width * (_COLUMN_WIDTH - 2 * _LANE_PAD))
 
 
 _note_image_cache: dict[tuple[str, str], Image.Image | None] = {}
@@ -1195,7 +1197,7 @@ def _draw_note_image(
     columns: int,
     skin: str = DEFAULT_SKIN,
 ) -> bool:
-    """用指定皮肤素材画 Tap/Drag：宽度拉伸到音符宽度，高度按素材比例。
+    """用指定皮肤素材画 Tap/Drag：宽度拉伸到音符宽度，高度固定。
 
     Tech 皮肤的 Drag（wipe）染黄色，其余皮肤保持素材本色。
     """
@@ -1213,9 +1215,10 @@ def _draw_note_image(
     target_w = round(_note_pixel_width(width))
     if target_w <= _MIN_NOTE_PIXELS:
         return False
-    # 高度按素材宽高比（游戏九宫格上下 border 为 0，高度全拉伸）
-    target_h = max(1, round(target_w * note_image.height / note_image.width))
-    resized = note_image.resize((target_w, target_h), Image.Resampling.LANCZOS)
+    # 高度固定（游戏里音符高度不随宽度变化）
+    resized = note_image.resize(
+        (target_w, _NOTE_FIXED_HEIGHT), Image.Resampling.LANCZOS
+    )
     image.paste(resized, (px - resized.width // 2, py - resized.height // 2), resized)
     return True
 
@@ -1251,7 +1254,7 @@ def _draw_hold_polygon(
     颜色取指定皮肤 Hold 素材主色（素材是平条），透明度由叠加层控制。
     """
     color = _hold_color(skin)
-    half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 4
+    half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 2
     groups: dict[int, list[tuple[float, float, float]]] = {}
     for t, x1, width in note.points:
         col = _note_col(t, columns)
