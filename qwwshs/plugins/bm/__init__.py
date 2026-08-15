@@ -46,7 +46,7 @@ from .charter import (
     save_charters,
     search_charters,
 )
-from .chartpreview import find_chart, parse_chart, render_chart_preview
+from .chartpreview import available_diffs, find_chart, parse_chart, render_chart_preview
 from .constants import DATA_DIR, ConstantsError, get_song_constants
 from .decrypt import DecryptError, parse_account_data
 from .rating import ALL_DIFFS, compute_rating, normalize_n10_name, parse_scores
@@ -115,6 +115,9 @@ _bindings: dict[str, dict] = {}
 _awaiting_file: dict[str, float] = {}
 # QQ 号 -> {names: 模糊搜索结果, expire: 过期时间}（bmsong 序号选择）
 _song_pending: dict[str, dict] = {}
+# QQ 号 -> {stage: song/diff, names: 曲名列表, song: 已选曲名, diffs: 难度列表,
+#           expire: 过期时间}（bmchart 先选曲再选难度）
+_chart_pending: dict[str, dict] = {}
 # QQ 号 -> {alias: 别名, names: 搜索结果, expire: 过期时间}（bmaddname 流程）
 _addname_pending: dict[str, dict] = {}
 # QQ 号 -> {alias: 别名, names: 搜索结果, expire: 过期时间}（bmremovename 流程）
@@ -460,6 +463,7 @@ bm_random = on_command("bmrandom", priority=5, block=True)
 bm_rating_style = on_command("bmratingstyle", priority=5, block=True)
 bm_file_watch = on_message(priority=10, block=False)
 bm_song_pick = on_message(priority=10, block=False)
+bm_chart_pick = on_message(priority=10, block=False)
 bm_addname_pick = on_message(priority=10, block=False)
 bm_remove_pick = on_message(priority=10, block=False)
 bm_charter_pick = on_message(priority=10, block=False)
@@ -505,7 +509,7 @@ _HELP_TEXT = (
     "/bmchartlist <定数1> [定数2] [难度...] — 按定数区间生成定数表图\n"
     "   13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
     "/bmrandom <定数1> [定数2] [难度...] — 在定数区间内随机挑一首曲目\n"
-    "/bmchart <曲名> [难度] — 生成谱面预览图（每分钟一段，难度可省）\n"
+    "/bmchart <曲名> — 谱面预览图（先选曲目再选难度）\n"
     "/bmbotversion — 查看 bot 版本\n"
     "━━━━━━━━━━━━━━━━━━\n"
     "📱 存档位置：/Android/data/com.skywaystudio.BerryMelody/files/FormalSave.txt"
@@ -1467,37 +1471,110 @@ async def handle_chart(arg: Message = CommandArg()) -> None:
 
 
 @bm_chart_preview.handle()
-async def handle_chart_preview(arg: Message = CommandArg()) -> None:
-    """生成谱面预览图（/bmchart <曲名> [难度]）。"""
-    parts = arg.extract_plain_text().split()
-    if not parts:
+async def handle_chart_preview(
+    event: MessageEvent, arg: Message = CommandArg()
+) -> None:
+    """生成谱面预览图：先选曲（同 bmsong 检索），再选难度。"""
+    qq = str(event.user_id)
+    query = arg.extract_plain_text().strip()
+    if not query:
         await bm_chart_preview.finish(
-            "用法：/bmchart <曲名> [难度]\n"
-            "例如：/bmchart ether vortex\n/bmchart fallen angel tt\n"
-            "难度可省（缺省选该曲定数最高的难度）；支持 RL/IL/TT/RU"
+            "用法：/bmchart <曲名>\n例如：/bmchart ether vortex\n"
+            "先选择曲目，再选择难度（支持别名/模糊搜索）"
         )
-    # 曲名可能含空格：最后一个 token 是合法难度才视为难度参数
-    last = parts[-1].upper()
-    if last in ("RL", "IL", "TT", "RU", "DM", "FL"):
-        query = " ".join(parts[:-1])
-        diff = last
-        found = await asyncio.to_thread(find_chart, query, diff)
-        if found is None:
-            found = await asyncio.to_thread(find_chart, " ".join(parts))
-    else:
-        query = " ".join(parts)
-        diff = None
-        found = await asyncio.to_thread(find_chart, query)
+    if not SONG_CONSTANTS:
+        await bm_chart_preview.finish("❌ 定数表未加载，无法查询")
+    names = search_songs(SONG_CONSTANTS, query)
+    if not names:
+        # 定数表外的谱面（如隐藏谱 MIRЯOЯ）按文件名直接找
+        direct = await asyncio.to_thread(find_chart, query)
+        if direct is None:
+            await bm_chart_preview.finish(f"❌ 未找到与「{query}」相关的曲目")
+        song = direct[0].name.rsplit(" ", 1)[0]
+        await _ask_chart_difficulty(bm_chart_preview, qq, song)
+        return
+    if len(names) == 1:
+        await _ask_chart_difficulty(bm_chart_preview, qq, names[0])
+        return
+    _chart_pending[qq] = {
+        "stage": "song",
+        "names": names,
+        "expire": time.monotonic() + _SONG_PICK_TTL,
+    }
+    lines = [f"🔍 找到 {len(names)} 首相关曲目，回复序号查看详情："]
+    lines.extend(f"{i + 1}. {_display_name(name)}" for i, name in enumerate(names))
+    lines.append(f"（{_SONG_PICK_TTL:.0f} 秒内有效）")
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await bm_chart_preview.finish(MessageSegment.image(img_bytes))
+
+
+async def _ask_chart_difficulty(matcher: Matcher, qq: str, song: str) -> None:
+    """进入 bmchart 选难度阶段（仅一个难度时直接出图）。"""
+    diffs = await asyncio.to_thread(available_diffs, song)
+    if not diffs:
+        await matcher.finish("❌ 该曲目没有谱面文件")
+    if len(diffs) == 1:
+        await _render_chart_image(matcher, song, diffs[0])
+        return
+    _chart_pending[qq] = {
+        "stage": "diff",
+        "song": song,
+        "diffs": diffs,
+        "expire": time.monotonic() + _SONG_PICK_TTL,
+    }
+    lines = [f"📌 请选择 {_display_name(song)} 的难度，回复序号："]
+    lines.extend(f"{i + 1}. {diff}" for i, diff in enumerate(diffs))
+    lines.append(f"（{_SONG_PICK_TTL:.0f} 秒内有效）")
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await matcher.finish(MessageSegment.image(img_bytes))
+
+
+async def _render_chart_image(matcher: Matcher, song: str, diff: str) -> None:
+    """按曲名+难度渲染谱面预览图并发送。"""
+    found = await asyncio.to_thread(find_chart, song, diff)
     if found is None:
-        await bm_chart_preview.finish("❌ 未找到该曲目的谱面文件")
+        await matcher.finish("❌ 该曲目没有对应难度的谱面文件")
     path, found_diff = found
     chart = await asyncio.to_thread(parse_chart, path)
     if not chart.notes:
-        await bm_chart_preview.finish("❌ 谱面中没有音符数据")
+        await matcher.finish("❌ 谱面中没有音符数据")
     img_bytes = await asyncio.to_thread(
-        render_chart_preview, chart, f"{query} ({found_diff})"
+        render_chart_preview, chart, f"{_display_name(song)} ({found_diff})"
     )
-    await bm_chart_preview.finish(MessageSegment.image(img_bytes))
+    await matcher.finish(MessageSegment.image(img_bytes))
+
+
+@bm_chart_pick.handle()
+async def handle_chart_pick(event: MessageEvent) -> None:
+    """bmchart 的曲目/难度选择：接收纯数字序号。"""
+    qq = str(event.user_id)
+    state = _chart_pending.get(qq)
+    if state is None:
+        return
+    if time.monotonic() > state["expire"]:
+        _chart_pending.pop(qq, None)
+        return
+    text = event.get_plaintext().strip()
+    if not text.isdigit():
+        return
+    index = int(text)
+    _chart_pending.pop(qq, None)
+    if state["stage"] == "song":
+        names = state["names"]
+        if index < 1 or index > len(names):
+            await bm_chart_pick.send(
+                f"❌ 序号无效（1-{len(names)}），请重新 /bmchart 查询"
+            )
+            return
+        await _ask_chart_difficulty(bm_chart_pick, qq, names[index - 1])
+        return
+    diffs = state["diffs"]
+    if index < 1 or index > len(diffs):
+        await bm_chart_pick.send(
+            f"❌ 序号无效（1-{len(diffs)}），请重新 /bmchart 查询"
+        )
+        return
+    await _render_chart_image(bm_chart_pick, state["song"], diffs[index - 1])
 
 
 @bm_random.handle()

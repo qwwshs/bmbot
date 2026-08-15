@@ -607,6 +607,11 @@ def find_chart(name: str, diff: str | None = None) -> tuple[Path, str] | None:
     return None
 
 
+def available_diffs(song: str) -> list[str]:
+    """返回该曲目已收录谱面的难度列表（按 _CHART_DIFFS 顺序）。"""
+    return [diff for diff in _CHART_DIFFS if _chart_file(song, diff) is not None]
+
+
 def _locate_chart(
     constants: dict[str, dict], song: str, diff: str | None
 ) -> tuple[Path, str] | None:
