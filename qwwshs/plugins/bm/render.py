@@ -1324,6 +1324,7 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     charts: list,
     rows: int,
     goal_factors: list[float] | None,
+    share: str | None = None,
 ) -> int:
     """新版分区：纹路2.png 标题底板 + 居中标题 + 网格（每行 5 首）。"""
     y += 24
@@ -1350,6 +1351,17 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
         fill=CARD2_TEXT,
         anchor="ma",
     )
+    # 标题左侧显示 rating 占比数字（BM_NEOType-Medium，与标题垂直居中）
+    if share:
+        share_font = _font(40, medium=True)
+        title_w = draw.textlength(title, font=_font(CARD2_SECTION_TITLE, bold=True))
+        draw.text(
+            (img.width / 2 - title_w / 2 - 24, y + CARD2_SECTION_TITLE // 2),
+            share,
+            font=share_font,
+            fill=CARD2_TEXT,
+            anchor="mm",
+        )
     y = tex_top + tex_h + CARD2_SECTION_GRID_GAP
     card_w = CARD2_PLATE_W + CARD2_GAP
     for index, chart in enumerate(charts):
@@ -1379,7 +1391,7 @@ def _fmt_count(count: object) -> str:
     return f"{n // 1000}K" if n >= _FMT_K_THRESHOLD else str(n)
 
 
-def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
+def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917, C901
     player_name: str,
     result: RatingResult,
     grade_counts: dict[str, dict[str, int]],
@@ -1504,7 +1516,9 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
         anchor="mm",
     )
     # 光锥琥珀 / 珂灵币：名字条右侧（高度 = 名字条高度，保持比例），
-    # 图标内左半写名称、右半写数量（≥10000 用 K），字符高 = 图标高 1/2
+    # 图标内左半写名称、右半写数量（≥10000 用 K），字符高 = 图标高 1/2；
+    # 珂灵币右缘移到图片右缘 - 珂灵币宽/8，光锥琥珀同步右移相同距离
+    positions = []
     prev_right = CARD2_NAME_BAR_W
     prev_w = 0
     for icon_name, label, count in (
@@ -1525,6 +1539,15 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
         icon_w = max(1, round(icon.width * icon_h / icon.height))
         icon = icon.resize((icon_w, icon_h), Image.Resampling.LANCZOS)
         icon_x = prev_right + (icon_w // 2 if prev_w == 0 else prev_w // 8)
+        positions.append((icon, label, count, icon_w, icon_x))
+        prev_right = icon_x + icon_w
+        prev_w = icon_w
+    shift = 0
+    if positions:
+        _, _, _, last_w, last_x = positions[-1]
+        shift = (img.width - last_w - last_w // 8) - last_x
+    for icon, label, count, icon_w, base_x in positions:
+        icon_x = base_x + shift
         img.paste(icon, (icon_x, bar_top), icon)
         half_w = icon_w // 2
         mid_x = icon_x + half_w
@@ -1557,8 +1580,6 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
             fill=(255, 255, 255),
             anchor="mm",
         )
-        prev_right = icon_x + icon_w
-        prev_w = icon_w
     # 等级分布：玩家名下方，从左边缘到名字条右边缘（列宽拉伸）
     _draw_grade_matrix(
         img, draw, matrix_y, grade_counts, right=CARD2_NAME_BAR_W, left=CARD2_PAD
@@ -1569,10 +1590,24 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     b30_factors = [b30_goal_factor()] * len(result.b30_charts)
     n10_factors = [n10_goal_factor(i) for i in range(len(result.n10_charts))]
     y = _draw_rating_section_new(
-        img, draw, y, "B30", result.b30_charts, b30_rows, b30_factors
+        img,
+        draw,
+        y,
+        "B30",
+        result.b30_charts,
+        b30_rows,
+        b30_factors,
+        share=f"{result.b30_avg * 0.8:.2f}",
     )
     y = _draw_rating_section_new(
-        img, draw, y, "N10", result.n10_charts, n10_rows, n10_factors
+        img,
+        draw,
+        y,
+        "N10",
+        result.n10_charts,
+        n10_rows,
+        n10_factors,
+        share=f"{result.n10_avg * 0.2:.2f}",
     )
 
     buf = io.BytesIO()
