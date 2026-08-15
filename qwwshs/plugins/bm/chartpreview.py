@@ -44,8 +44,9 @@ _NOTE_TYPES = tuple(NOTE_COLORS)
 # Hold 每段点数（拍, x, y）
 _NOTE_SEGMENT = 3
 # 黑线：深色背景上用白色细线表示（x 范围 [-3, 3]，超出轨道部分裁掉）
-_BLACK_LINE_COLOR = (255, 255, 255)
 _BLACK_LINE_WIDTH = 2
+# 黑线透明度（0-255，128 = 50%）
+_BLACK_LINE_ALPHA = 128
 # 折线至少需要的点数
 _MIN_POLYLINE_POINTS = 2
 # 公式块采样点数量上下限与缺省值
@@ -800,7 +801,7 @@ def render_chart_preview(chart: ChartData, display_name: str) -> bytes:
 
     _draw_title(draw, width, chart, display_name)
     _draw_separators(draw, columns, height)
-    _draw_black_lines(draw, chart.black_lines, columns)
+    _draw_black_lines(image, chart.black_lines, columns)
     _draw_notes(image, draw, chart.notes, columns)
 
     buffer = io.BytesIO()
@@ -843,21 +844,26 @@ def _draw_separators(draw: ImageDraw.ImageDraw, columns: int, height: int) -> No
 
 
 def _draw_black_lines(
-    draw: ImageDraw.ImageDraw,
+    image: Image.Image,
     black_lines: list[list[tuple[float, float]]],
     columns: int,
 ) -> None:
-    """黑线折线：按分钟段分组，x 裁到轨道范围内。"""
+    """黑线折线：按分钟段分组，x 裁到轨道范围内，50% 透明度叠加。"""
+    if not black_lines:
+        return
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
     for line in black_lines:
         for group in _group_by_column(line, columns):
             points = [_black_line_point(t, x, columns) for t, x in group]
             if len(points) >= _MIN_POLYLINE_POINTS:
                 draw.line(
                     points,
-                    fill=_BLACK_LINE_COLOR,
+                    fill=(255, 255, 255, _BLACK_LINE_ALPHA),
                     width=_BLACK_LINE_WIDTH,
                     joint="curve",
                 )
+    image.paste(overlay, (0, 0), overlay)
 
 
 def _black_line_point(t: float, x: float, columns: int) -> tuple[float, float]:
