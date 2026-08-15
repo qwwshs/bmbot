@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import io
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from PIL import Image, ImageDraw
 
@@ -36,6 +38,10 @@ _BLACK_LINE_COLOR = (255, 255, 255)
 _BLACK_LINE_WIDTH = 2
 # 折线至少需要的点数
 _MIN_POLYLINE_POINTS = 2
+# 公式块采样点数量上下限与缺省值
+_MIN_SAMPLES = 4
+_MAX_SAMPLES = 400
+_DEFAULT_SAMPLES = 100
 
 # 布局：每 30 秒一段，段宽 320px、高 2000px
 _SEGMENT_SECONDS = 30.0
@@ -119,10 +125,9 @@ def parse_chart(path: Path) -> ChartData:
         )
         for note in raw_notes
     ]
-    chart.black_lines = [
-        [(_beat_to_time(t, changes, default_bpm), x) for t, x in line]
-        for line in _parse_black_lines(sections.get("anim", []))
-    ]
+    chart.black_lines = _parse_black_lines(
+        sections.get("anim", []), changes, default_bpm
+    )
     chart.duration = max(
         (point[0] for note in chart.notes for point in note.points), default=0.0
     )
@@ -176,19 +181,396 @@ def _parse_notes(lines: list[str]) -> list[Note]:
     return notes
 
 
-def _parse_black_lines(lines: list[str]) -> list[list[tuple[float, float]]]:
-    """解析 #anim 里的 BlackLine 折线（拍, x 点对，不含 ::[ 动画块形式）。"""
+def _parse_black_lines(
+    lines: list[str], bpm_changes: list[tuple[float, float]], default_bpm: float
+) -> list[list[tuple[float, float]]]:
+    """解析 #anim 里的 BlackLine：返回 (时间秒, x) 折线列表。
+
+    简单形式 ``BlackLine: 拍, x, ...;`` 直接取点对；
+    块形式 ``BlackLine::[ $... ];`` 按公式求值采样（Freq 个点）。
+    两者都可能带 ``:{ ... }`` 属性块，先剥离。
+    """
     out: list[list[tuple[float, float]]] = []
     for raw_stmt in "\n".join(lines).split(";"):
         stmt = raw_stmt.strip()
+        if not stmt.startswith("BlackLine"):
+            continue
+        if stmt.startswith("BlackLine::["):
+            curve = _eval_black_line_block(stmt, bpm_changes, default_bpm)
+            if curve:
+                out.append(curve)
+            continue
         match = re.match(r"BlackLine:\s*([\d.]+)\s*,\s*(-?[\d.]+)(.*)", stmt)
         if not match:
             continue
+        body = re.split(r":\{", match.group(3), maxsplit=1)[0]
         points = [(float(match.group(1)), float(match.group(2)))]
-        rest = [float(v) for v in match.group(3).split(",") if v.strip()]
+        rest = [float(v) for v in body.split(",") if v.strip()]
         points.extend((rest[i], rest[i + 1]) for i in range(0, len(rest) - 1, 2))
-        out.append(points)
+        out.append(
+            [(_beat_to_time(b, bpm_changes, default_bpm), x) for b, x in points]
+        )
     return out
+
+
+# ---------- BlackLine 块公式求值 ----------
+
+
+class _FormulaError(ValueError):
+    """公式语法或求值错误。"""
+
+
+def _bezier_value(points: list[float], value: float) -> float:
+    """贝塞尔曲线求值（Bernstein 递推）。"""
+    work = list(points)
+    for level in range(len(points) - 1, 0, -1):
+        for i in range(level):
+            work[i] = work[i] * (1 - value) + work[i + 1] * value
+    return work[0]
+
+
+def _easing(name: str, value: float) -> float:
+    """easings.net 缓动函数（Quad/Cubic 系列）。"""
+    t = min(1.0, max(0.0, value))
+    if name == "linear":
+        return t
+    kind, phase = name[4:], ""
+    for prefix in ("easeInOut", "easeOut", "easeIn"):
+        if name.startswith(prefix):
+            kind, phase = name[len(prefix) :], prefix
+            break
+    if kind not in ("Quad", "Cubic", "Quart", "Quint", "Sine", "Expo", "Circ"):
+        raise _FormulaError(f"不支持的缓动函数 {name}")  # noqa: TRY003
+    if phase == "easeIn":
+        return _ease_in(kind, t)
+    if phase == "easeOut":
+        return 1 - _ease_in(kind, 1 - t)
+    if t < 0.5:  # noqa: PLR2004
+        return _ease_in(kind, 2 * t) / 2
+    return 1 - _ease_in(kind, 2 - 2 * t) / 2
+
+
+def _ease_in(kind: str, t: float) -> float:  # noqa: PLR0911
+    if kind == "Quad":
+        return t * t
+    if kind == "Cubic":
+        return t * t * t
+    if kind == "Quart":
+        return t**4
+    if kind == "Quint":
+        return t**5
+    if kind == "Sine":
+        return 1 - math.cos(t * math.pi / 2)
+    if kind == "Expo":
+        return 0.0 if t == 0 else math.pow(2, 10 * (t - 1))
+    return 1 - math.sqrt(1 - t * t)  # Circ
+
+
+def _eval_formula(text: str, env: dict[str, float]) -> float:
+    """求值公式表达式（数字/变量/四则/函数调用）。"""
+    tokens = re.findall(r"\d+\.?\d*|\.\d+|[a-zA-Z_][a-zA-Z0-9_]*|[+\-*/%^(),]", text)
+    parser = _FormulaParser(tokens, env)
+    value = parser.parse()
+    if parser.pos != len(tokens):
+        raise _FormulaError(f"公式末尾有多余内容: {text!r}")  # noqa: TRY003
+    return value
+
+
+class _FormulaParser:
+    """递归下降表达式解析器。"""
+
+    def __init__(self, tokens: list[str], env: dict[str, float]) -> None:
+        self.tokens = tokens
+        self.pos = 0
+        self.env = env
+
+    def parse(self) -> float:
+        return self._expr()
+
+    def _peek(self) -> str | None:
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+    def _expr(self) -> float:
+        value = self._term()
+        while self._peek() in ("+", "-"):
+            op = self.tokens[self.pos]
+            self.pos += 1
+            right = self._term()
+            value = value + right if op == "+" else value - right
+        return value
+
+    def _term(self) -> float:
+        value = self._unary()
+        while self._peek() in ("*", "/", "%"):
+            op = self.tokens[self.pos]
+            self.pos += 1
+            right = self._unary()
+            if op == "*":
+                value *= right
+            elif op == "/":
+                value /= right
+            else:
+                value %= right
+        return value
+
+    def _unary(self) -> float:
+        if self._peek() in ("+", "-"):
+            op = self.tokens[self.pos]
+            self.pos += 1
+            value = self._unary()
+            return value if op == "+" else -value
+        return self._power()
+
+    def _power(self) -> float:
+        base = self._atom()
+        if self._peek() in ("^", "**"):
+            self.pos += 1
+            return math.pow(base, self._power())
+        return base
+
+    def _atom(self) -> float:
+        token = self._peek()
+        if token is None:
+            raise _FormulaError("公式意外结束")
+        if token[0].isdigit() or token[0] == ".":
+            self.pos += 1
+            return float(token)
+        if token == "(":
+            self.pos += 1
+            value = self._expr()
+            if self._peek() != ")":
+                raise _FormulaError("缺少右括号")
+            self.pos += 1
+            return value
+        if token[0].isalpha():
+            self.pos += 1
+            if self._peek() == "(":
+                return self._call(token)
+            if token in self.env:
+                return self.env[token]
+            raise _FormulaError(f"未定义变量 {token}")  # noqa: TRY003
+        raise _FormulaError(f"无法识别的符号 {token!r}")  # noqa: TRY003
+
+    def _call(self, name: str) -> float:
+        self.pos += 1  # 跳过 (
+        args: list[float] = []
+        if self._peek() != ")":
+            while True:
+                args.append(self._expr())
+                if self._peek() != ",":
+                    break
+                self.pos += 1
+        if self._peek() != ")":
+            raise _FormulaError(f"函数 {name} 缺少右括号")  # noqa: TRY003
+        self.pos += 1
+        return _call_function(name, args)
+
+
+_FUNCTIONS: dict[str, Callable[..., float]] = {}
+
+
+def _register(name: str) -> Callable:
+    def decorator(fn: Callable[..., float]) -> Callable:
+        _FUNCTIONS[name] = fn
+        return fn
+
+    return decorator
+
+
+# bezier 至少 2 个控制点 + 1 个 value
+_BEZIER_MIN_ARGS = 3
+
+
+def _call_function(name: str, args: list[float]) -> float:
+    if name == "bezier":
+        if len(args) < _BEZIER_MIN_ARGS:
+            raise _FormulaError("bezier 至少需要 2 个控制点 + value")  # noqa: TRY003
+        return _bezier_value(args[:-1], args[-1])
+    if name == "pi":
+        return math.pi  # 旧版需要占位参数，忽略
+    if name in _FUNCTIONS:
+        return _FUNCTIONS[name](*args)
+    if name.startswith("ease"):
+        if len(args) != 1:
+            raise _FormulaError(f"缓动函数 {name} 需要 1 个参数")  # noqa: TRY003
+        return _easing(name, args[0])
+    raise _FormulaError(f"未支持函数 {name}")  # noqa: TRY003
+
+
+@_register("sin")
+def _f_sin(value: float) -> float:
+    return math.sin(value)
+
+
+@_register("cos")
+def _f_cos(value: float) -> float:
+    return math.cos(value)
+
+
+@_register("tan")
+def _f_tan(value: float) -> float:
+    return math.tan(value)
+
+
+@_register("arcsin")
+def _f_arcsin(value: float) -> float:
+    return math.asin(min(1.0, max(-1.0, value)))
+
+
+@_register("arccos")
+def _f_arccos(value: float) -> float:
+    return math.acos(min(1.0, max(-1.0, value)))
+
+
+@_register("arctan")
+def _f_arctan(value: float) -> float:
+    return math.atan(value)
+
+
+@_register("abs")
+def _f_abs(value: float) -> float:
+    return abs(value)
+
+
+@_register("pow")
+def _f_pow(a: float, n: float) -> float:
+    return math.pow(a, n)
+
+
+@_register("exp")
+def _f_exp(value: float) -> float:
+    return math.exp(value)
+
+
+@_register("clamp")
+def _f_clamp(value: float, low: float, high: float) -> float:
+    return min(high, max(low, value))
+
+
+@_register("map")
+def _f_map(value: float, a: float, b: float) -> float:
+    return a + (b - a) * value
+
+
+@_register("remap")
+def _f_remap(value: float, a: float, b: float) -> float:
+    return (value - a) / (b - a) if b != a else 0.0
+
+
+@_register("between")
+def _f_between(value: float, a: float, b: float) -> float:
+    return 1.0 if a <= value <= b else 0.0
+
+
+@_register("outof")
+def _f_outof(value: float, a: float, b: float) -> float:
+    return 0.0 if a <= value <= b else 1.0
+
+
+@_register("less")
+def _f_less(value: float, other: float) -> float:
+    return 1.0 if value < other else 0.0
+
+
+@_register("greater")
+def _f_greater(value: float, other: float) -> float:
+    return 1.0 if value > other else 0.0
+
+
+@_register("equal")
+def _f_equal(value: float, other: float) -> float:
+    return 1.0 if value == other else 0.0
+
+
+@_register("unequal")
+def _f_unequal(value: float, other: float) -> float:
+    return 0.0 if value == other else 1.0
+
+
+_BLOCK_STMT_RE = re.compile(r"\$?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*(.*))?$")
+
+
+def _eval_black_line_block(
+    stmt: str, bpm_changes: list[tuple[float, float]], default_bpm: float
+) -> list[tuple[float, float]] | None:
+    """求值 BlackLine::[ ... ] 公式块，返回 (时间秒, x) 折线。
+
+    y 为相对 Move_Y 的拍数偏移，x 为相对 Move_X 的横向偏移；
+    ``$ Mirror`` 时 x 取反。
+    """
+    match = re.match(
+        r"BlackLine::\[\s*(.*?)\](?::\{.*?\})?\s*;", stmt, flags=re.DOTALL
+    )
+    if not match:
+        return None
+    statements = _parse_block_statements(match.group(1))
+    if not statements:
+        return None
+    freq = _block_freq(statements)
+    sample_count = max(_MIN_SAMPLES, min(int(freq), _MAX_SAMPLES))
+
+    points: list[tuple[float, float]] = []
+    for i in range(sample_count + 1):
+        point = _sample_black_line(
+            statements,
+            i / sample_count,
+            freq,
+            bpm_changes,
+            default_bpm,
+        )
+        if point is not None:
+            points.append(point)
+    return points if len(points) >= _MIN_POLYLINE_POINTS else None
+
+
+def _parse_block_statements(text: str) -> list[tuple[str, str]]:
+    """把公式块文本解析为 (变量名, 表达式) 列表。"""
+    statements: list[tuple[str, str]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        stmt_match = _BLOCK_STMT_RE.match(line)
+        if stmt_match:
+            statements.append((stmt_match.group(1), stmt_match.group(2) or ""))
+    return statements
+
+
+def _block_freq(statements: list[tuple[str, str]]) -> float:
+    """读取 $ Freq（采样点频率），缺省 100。"""
+    for name, expr in statements:
+        if name == "Freq" and expr:
+            try:
+                return float(_eval_formula(expr, {"delta": 0.0}))
+            except (ValueError, ZeroDivisionError):
+                return _DEFAULT_SAMPLES
+    return _DEFAULT_SAMPLES
+
+
+def _sample_black_line(
+    statements: list[tuple[str, str]],
+    delta: float,
+    freq: float,
+    bpm_changes: list[tuple[float, float]],
+    default_bpm: float,
+) -> tuple[float, float] | None:
+    """求值一个采样点的 (时间秒, x)。"""
+    env = {"delta": delta, "Freq": freq, "Move_X": 0.0, "Move_Y": 0.0}
+    mirror = False
+    try:
+        for name, expr in statements:
+            if not expr:
+                if name == "Mirror":
+                    mirror = True
+                continue
+            env[name] = _eval_formula(expr, env)
+    except (ValueError, ZeroDivisionError):
+        return None
+    beat = env.get("Move_Y", 0.0) + env.get("y", 0.0)
+    x = env.get("Move_X", 0.0) + env.get("x", 0.0)
+    if mirror:
+        x = -x
+    return max(0.0, _beat_to_time(beat, bpm_changes, default_bpm)), x
 
 
 def _beat_to_time(
