@@ -1332,6 +1332,7 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     tex_top = y + CARD2_SECTION_TITLE // 2 - tex_h // 2
     # 纹路2.png 作为 B30/N10 字符串的底板（保持比例，居中于标题，透明度 75%）
     texture = _load_ui_texture("纹路2.png")
+    tex_w = 0
     if texture is not None:
         tex_w = max(1, round(texture.width * tex_h / texture.height))
         texture = texture.resize((tex_w, tex_h), Image.Resampling.LANCZOS)
@@ -1351,11 +1352,11 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
         fill=CARD2_TEXT,
         anchor="ma",
     )
-    # 标题右侧显示 rating 占比数字（图片 3/4 位置，BM_NEOType-Medium，与标题垂直居中）
-    if share:
+    # 标题右侧显示 rating 数字（底板 3/4 位置，BM_NEOType-Medium，与标题垂直居中）
+    if share and tex_w:
         share_font = _font(40, medium=True)
         draw.text(
-            (img.width * 3 // 4, y + CARD2_SECTION_TITLE // 2),
+            (img.width / 2 + tex_w / 4, y + CARD2_SECTION_TITLE // 2),
             share,
             font=share_font,
             fill=CARD2_TEXT,
@@ -1596,7 +1597,7 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917, C901
         result.b30_charts,
         b30_rows,
         b30_factors,
-        share=f"{result.b30_avg * 0.8:.2f}",
+        share=f"{result.b30_avg:.2f}",
     )
     y = _draw_rating_section_new(
         img,
@@ -1606,7 +1607,7 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917, C901
         result.n10_charts,
         n10_rows,
         n10_factors,
-        share=f"{result.n10_avg * 0.2:.2f}",
+        share=f"{result.n10_avg:.2f}",
     )
 
     buf = io.BytesIO()
