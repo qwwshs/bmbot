@@ -3,7 +3,7 @@
 解析 ``chart/`` 目录下的谱面文本（AssetStudio 解包导出的 TextAsset），
 把音符按 beat→时间换算后铺到分栏预览图上：
 
-- 每分钟拆成一栏，从左到右排列，白色竖线分隔
+- 每 30 秒拆成一栏，从左到右排列，白色竖线分隔
 - Tap 用蓝色、Drag 用黄色、Hold（滑条）用红色
 - 仅用 ``#speed`` 的 BpmChange 做 beat→时间换算（忽略第三位），
   流速（BpmMove/InitialSpeed）等属性不参与
@@ -32,8 +32,8 @@ _NOTE_TYPES = tuple(NOTE_COLORS)
 # Hold 每段点数（拍, x, y）
 _NOTE_SEGMENT = 3
 
-# 布局：每分钟一段，段宽 320px、高 2000px
-_SEGMENT_SECONDS = 60.0
+# 布局：每 30 秒一段，段宽 320px、高 2000px
+_SEGMENT_SECONDS = 30.0
 _COLUMN_WIDTH = 320
 _COLUMN_HEIGHT = 2000
 _SEPARATOR_WIDTH = 4
@@ -44,6 +44,8 @@ _BG = (22, 24, 30)
 _TITLE_COLOR = (232, 233, 238)
 _SUB_COLOR = (128, 132, 142)
 _GUIDE_COLOR = (62, 66, 76)
+# 音符条厚度（像素，垂直方向全高）
+_NOTE_THICKNESS = 7
 
 _DEFAULT_BPM = 120.0
 # 结尾超出分钟分界的容差（秒），超出视为需要新一栏
@@ -286,8 +288,11 @@ def _draw_note_bar(
     px = _note_x(x1, col)
     half = width * (_COLUMN_WIDTH - 2 * _LANE_PAD) / 4
     py = _note_y(t, col)
+    thickness = _NOTE_THICKNESS / 2
     draw.rounded_rectangle(
-        (px - half, py - 7, px + half, py + 7), radius=4, fill=color
+        (px - half, py - thickness, px + half, py + thickness),
+        radius=3,
+        fill=color,
     )
 
 
@@ -308,8 +313,11 @@ def _draw_hold(
     for pts in groups.values():
         if len(pts) == 1:
             px, py, half = pts[0]
+            thickness = _NOTE_THICKNESS / 2
             draw.rounded_rectangle(
-                (px - half, py - 7, px + half, py + 7), radius=4, fill=color
+                (px - half, py - thickness, px + half, py + thickness),
+                radius=3,
+                fill=color,
             )
             continue
         lefts = [(px - half, py) for px, py, half in pts]
