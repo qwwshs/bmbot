@@ -1355,8 +1355,9 @@ def _draw_rating_section_new(  # noqa: PLR0913, PLR0917
     # 标题右侧显示 rating 数字（底板 3/4 位置，BM_NEOType-Medium，与标题垂直居中）
     if share and tex_w:
         share_font = _font(40, medium=True)
+        t_top, t_bottom = _text_ink(title, CARD2_SECTION_TITLE, bold=True)
         draw.text(
-            (img.width / 2 + tex_w / 4, y + CARD2_SECTION_TITLE // 2),
+            (img.width / 2 + tex_w / 4, y + (t_top + t_bottom) / 2),
             share,
             font=share_font,
             fill=CARD2_TEXT,
