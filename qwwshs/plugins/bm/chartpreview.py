@@ -30,13 +30,31 @@ CHART_DIR = Path(__file__).resolve().parent / "chart"
 # 谱面难度优先级（缺省按定数最高选，无定数信息时按此顺序兜底）
 _CHART_DIFFS = ("RU", "TT", "IL", "RL", "DM", "FL")
 
-# 音符类型 → 颜色（Tap 蓝 / Drag 黄 / Hold 红）
+NOTE_DIR = Path(__file__).resolve().parent / "note"
+
+# 音符类型 → 颜色（素材缺失时的回退色：Tap 蓝 / Drag 黄 / Hold 红）
 NOTE_COLORS = {
     "Tap": (64, 160, 255),
     "Drag": (255, 205, 64),
     "Hold": (255, 80, 80),
 }
 _NOTE_TYPES = tuple(NOTE_COLORS)
+
+_note_image_cache: dict[str, Image.Image | None] = {}
+
+
+def _note_image(kind: str) -> Image.Image | None:
+    """加载 note/ 下的音符素材（White_Tap/Drag/Hold.png），带缓存。"""
+    if kind not in _note_image_cache:
+        image = None
+        path = NOTE_DIR / f"White_{kind}.png"
+        if path.exists():
+            try:
+                image = Image.open(path).convert("RGBA")
+            except OSError:
+                image = None
+        _note_image_cache[kind] = image
+    return _note_image_cache[kind]
 # Hold 每段点数（拍, x, y）
 _NOTE_SEGMENT = 3
 # 黑线：深色背景上用白色细线表示（x 范围 [-3, 3]，超出轨道部分裁掉）
@@ -63,6 +81,8 @@ _SUB_COLOR = (128, 132, 142)
 _GUIDE_COLOR = (62, 66, 76)
 # 音符条厚度（像素，垂直方向全高）
 _NOTE_THICKNESS = 7
+# 音符素材/段长小于该像素数时不绘制
+_MIN_NOTE_PIXELS = 2
 
 _DEFAULT_BPM = 120.0
 # 结尾超出分钟分界的容差（秒），超出视为需要新一栏
@@ -793,7 +813,7 @@ def render_chart_preview(chart: ChartData, display_name: str) -> bytes:
     _draw_title(draw, width, chart, display_name)
     _draw_separators(draw, columns, height)
     _draw_black_lines(draw, chart.black_lines, columns)
-    _draw_notes(draw, chart.notes, columns)
+    _draw_notes(image, draw, chart.notes, columns)
 
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
@@ -878,15 +898,99 @@ def _group_by_column(
 
 
 def _draw_notes(
-    draw: ImageDraw.ImageDraw, notes: list[Note], columns: int
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    notes: list[Note],
+    columns: int,
 ) -> None:
+    """音符绘制：note/ 素材优先，缺失时回退彩色条。"""
     for note in notes:
-        color = NOTE_COLORS[note.kind]
         if note.kind == "Hold":
-            _draw_hold(draw, note, color, columns)
+            if not _draw_hold_image(image, note, columns):
+                _draw_hold(draw, note, NOTE_COLORS["Hold"], columns)
         else:
             for point in note.points:
-                _draw_note_bar(draw, point, color, columns)
+                if not _draw_note_image(image, note.kind, point, columns):
+                    _draw_note_bar(draw, point, NOTE_COLORS[note.kind], columns)
+
+
+def _note_pixel_width(width: float) -> int:
+    """音符宽度值（x2）→ 像素宽。"""
+    return max(1, int(width * (_COLUMN_WIDTH - 2 * _LANE_PAD) / 2))
+
+
+def _draw_note_image(
+    image: Image.Image,
+    kind: str,
+    point: tuple[float, float, float],
+    columns: int,
+) -> bool:
+    """用 note/ 素材画 Tap/Drag：按音符宽度等比缩放后居中粘贴。"""
+    note_image = _note_image(kind)
+    if note_image is None:
+        return False
+    t, x1, width = point
+    col = _note_col(t, columns)
+    px = round(_note_x(x1, col))
+    py = round(_note_y(t, col))
+    target_w = _note_pixel_width(width)
+    if target_w <= _MIN_NOTE_PIXELS:
+        return False
+    target_h = max(1, round(target_w * note_image.height / note_image.width))
+    resized = note_image.resize((target_w, target_h), Image.Resampling.LANCZOS)
+    image.paste(resized, (px - target_w // 2, py - target_h // 2), resized)
+    return True
+
+
+def _draw_hold_image(
+    image: Image.Image, note: Note, columns: int
+) -> bool:
+    """用 note/ 素材画 Hold：每段拉伸为（段长 x 音符宽）并旋转对齐路径。"""
+    hold_image = _note_image("Hold")
+    if hold_image is None:
+        return False
+    groups: dict[int, list[tuple[float, float, float]]] = {}
+    for t, x1, width in note.points:
+        col = _note_col(t, columns)
+        groups.setdefault(col, []).append((_note_x(x1, col), _note_y(t, col), width))
+    for pts in groups.values():
+        if len(pts) == 1:
+            px, py, width = pts[0]
+            _paste_hold_piece(image, hold_image, (px, py), (px, py), width)
+            continue
+        for start, end in zip(pts, pts[1:]):
+            _paste_hold_piece(
+                image,
+                hold_image,
+                (start[0], start[1]),
+                (end[0], end[1]),
+                (start[2] + end[2]) / 2,
+            )
+    return True
+
+
+def _paste_hold_piece(
+    image: Image.Image,
+    hold_image: Image.Image,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    width: float,
+) -> None:
+    """把 Hold 素材拉伸成（段长 x 音符宽）并旋转到段方向，粘贴到中点。"""
+    x1, y1 = start
+    x2, y2 = end
+    length = math.hypot(x2 - x1, y2 - y1)
+    target_w = _note_pixel_width(width)
+    if length < _MIN_NOTE_PIXELS or target_w <= _MIN_NOTE_PIXELS:
+        return
+    angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+    piece = hold_image.resize(
+        (max(1, round(length)), target_w), Image.Resampling.LANCZOS
+    )
+    piece = piece.rotate(-angle, expand=True, resample=Image.Resampling.BICUBIC)
+    mid_x = round((x1 + x2) / 2) - piece.width // 2
+    mid_y = round((y1 + y2) / 2) - piece.height // 2
+    image.paste(piece, (mid_x, mid_y), piece)
 
 
 def _draw_note_bar(

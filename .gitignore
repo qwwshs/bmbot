@@ -151,6 +151,7 @@ dmypy.json
 data/
 qwwshs/plugins/bm/images/
 qwwshs/plugins/bm/chart/
+qwwshs/plugins/bm/note/
 qwwshs/plugins/bm/bm.zip
 qwwshs/plugins/bm/bm-score(4).html
 qwwshs/plugins/bm/Berry Melody定数表/
