@@ -33,7 +33,8 @@ _CHART_DIFFS = ("RU", "TT", "IL", "RL", "DM", "FL")
 
 NOTE_DIR = Path(__file__).resolve().parent / "note"
 
-# 音符皮肤：皮肤名 → {音符类型: 素材文件名}（类型缺失回退 White 对应素材）
+# 音符皮肤：皮肤名 → {音符类型: 素材文件名}（类型缺失回退 White 对应素材）。
+# 素材映射来自拆包材质（Material/*.json 的 _MainTex 引用）与 Sprite 数据。
 SKIN_SETS: dict[str, dict[str, str]] = {
     "White": {
         "Tap": "White_Tap.png",
@@ -57,8 +58,39 @@ SKIN_SETS: dict[str, dict[str, str]] = {
     },
     "Dr3": {
         "Tap": "Dr3_Tap.png",
-        "Drag": "White_Drag.png",
+        "Drag": "Dr3_Tap.png",
         "Hold": "Dr3_Hold.png",
+    },
+    # 以下皮肤按材质引用共用基础素材（tap/drag/hold 系列）
+    "Phigros": {
+        "Tap": "Berry_Tap.png",
+        "Drag": "Berry_Drag.png",
+        "Hold": "Berry_Hold.png",
+    },
+    "Lanota": {
+        "Tap": "Berry_Tap.png",
+        "Drag": "Berry_Drag.png",
+        "Hold": "Lanota_Hold.png",
+    },
+    "qqx": {
+        "Tap": "Berry_Tap.png",
+        "Drag": "Berry_Drag.png",
+        "Hold": "qqx_Hold.png",
+    },
+    "Ryceam": {
+        "Tap": "Berry_Tap.png",
+        "Drag": "Berry_Drag.png",
+        "Hold": "Ryceam_Hold.png",
+    },
+    "Evo": {
+        "Tap": "Berry_Tap.png",
+        "Drag": "Evo_Drag.png",
+        "Hold": "Evo_Hold.png",
+    },
+    "Red": {
+        "Tap": "Red_Tap.png",
+        "Drag": "Red_Drag.png",
+        "Hold": "Red_Hold.png",
     },
 }
 DEFAULT_SKIN = "White"
