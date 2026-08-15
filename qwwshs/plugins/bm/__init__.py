@@ -106,7 +106,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.7.7"
+BM_VERSION = "0.7.8"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -471,15 +471,20 @@ _HELP_TEXT = (
     "🎵 Berry Melody 查分 Bot\n"
     "━━━━━━━━━━━━━━━━━━\n"
     "/bmhelp — 查看本帮助\n"
-    "/bmbind — 绑定存档\n"
-    "   导出步骤：进入 Berry Melody，切换角色为克莱因，导出存档，\n"
-    "   随后将导出的存档放入 txt 文件再发送（聊天文件或群文件均可）\n"
-    "   · 如果系统为 iOS：复制存档到 Pages，新建空白文档，粘贴，\n"
-    "     点击右上角的分享，选择纯文本，导出并发送\n"
-    "   · vivo/iQOO：将存档复制进原子笔记/备忘录，点右上角，点导出文件，\n"
-    "     导出为文本，导出成功后点分享，发到群里\n"
-    "   · 内容为从 <RSAKeyValue> 开始的完整存档（FormalSave.txt）\n"
-    "   · 或已解密的 JSON 文本\n"
+    "/bmbind — 绑定存档（任选一种方法）\n"
+    "   ① 安卓通用（所有机型）：\n"
+    "      /bmbind → 打开文件管理 → Android → data →\n"
+    "      com.skywaystudio.BerryMelody → files →\n"
+    "      长按 FormalSave.txt 并发送至刚才的群聊\n"
+    "      （部分机型选 data 后可能跳转一次，其他步骤照常）\n"
+    "   ② 游戏内导出：进入 Berry Melody，切换角色为克莱因，导出存档，\n"
+    "      将导出的存档放入 txt 文件再发送（聊天文件或群文件均可）\n"
+    "   ③ iOS：复制存档到 Pages，新建空白文档，粘贴，\n"
+    "      点右上角分享 → 纯文本 → 导出并发送\n"
+    "   ④ vivo/iQOO：复制存档进原子笔记/备忘录，点右上角 →\n"
+    "      导出文件 → 文本，成功后点分享发到群里\n"
+    "   内容：从 <RSAKeyValue> 开始的完整存档（FormalSave.txt），\n"
+    "   或已解密的 JSON 文本\n"
     "/bmrating — 以图片输出你的 Rating 查分\n"
     "/bmratingstyle — 切换查分样式（新版/旧版）\n"
     "/bmsong <曲名> — 单曲查询（支持模糊搜索）\n"
@@ -514,13 +519,14 @@ async def handle_bind(event: MessageEvent) -> None:
     qq = str(event.user_id)
     _awaiting_file[qq] = time.monotonic()
     await bm_bind.finish(
-        "📄 请导出存档并发送 txt 文件（5 分钟内有效）\n"
-        "   步骤：进入 Berry Melody → 切换角色为克莱因 → 导出存档\n"
-        "   → 将导出的存档放入 txt 文件中再发送（聊天文件或群文件均可）\n"
-        "   如果系统为 iOS：复制存档到 Pages，新建空白文档，粘贴，\n"
-        "   点击右上角的分享，选择纯文本，导出并发送\n"
-        "   vivo/iQOO：将存档复制进原子笔记/备忘录，点右上角，点导出文件，\n"
-        "   导出为文本，导出成功后点分享，发到群里\n"
+        "📄 请导出存档并发送 txt 文件（5 分钟内有效），任选一种方法：\n"
+        "① 安卓通用：/bmbind → 文件管理 → Android → data →\n"
+        "   com.skywaystudio.BerryMelody → files →\n"
+        "   长按 FormalSave.txt 并发送至刚才的群聊\n"
+        "   （部分机型选 data 后可能跳转一次，其他步骤照常）\n"
+        "② 游戏内导出：切换角色为克莱因 → 导出存档 → 放入 txt 文件发送\n"
+        "③ iOS：复制存档到 Pages → 分享 → 纯文本 → 导出并发送\n"
+        "④ vivo/iQOO：复制进原子笔记 → 导出文件 → 文本 → 分享到本群\n"
         "（内容为从 <RSAKeyValue> 开始的完整存档，或已解密的 JSON 文本）"
     )
 
