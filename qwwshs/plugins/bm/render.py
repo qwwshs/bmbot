@@ -949,8 +949,10 @@ CARD2_RATING_BADGE_H = CARD2_NAME_BAR_H // 2  # Rating 徽章高 = 名字条 1/2
 CARD2_RATING_BADGE = (255, 24, 48)  # Rating 徽章颜色 #FF1830
 CARD2_RATING_FONT = CARD2_RATING_BADGE_H * 3 // 5  # Rating 徽章字
 CARD2_ICON_TEXT_MIN_FONT = 20  # 图标内文字自动缩放下限
+CARD2_MATRIX_GAP = 24  # 等级矩阵与头部图标行下缘的间距
 
 _FMT_K_THRESHOLD = 10000  # 数量 ≥ 此值用 K 显示（个十百省略）
+_ICON_CROP_ALPHA = 64  # 图标裁掉透明边的 alpha 阈值
 CARD2_MATRIX_PAD = 8  # 等级分布黑底白框内边距
 
 
@@ -1363,9 +1365,15 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
     grid_h = CARD2_PLATE_H + CARD2_GAP
     section_h = 24 + 34 + 14
     matrix_h = (1 + len(GRADES)) * 44 + 2 * CARD2_MATRIX_PAD
+    matrix_y = (
+        CARD2_AVATAR_TOP
+        + (CARD2_AVATAR - CARD2_NAME_BAR_H) // 2
+        + CARD2_NAME_BAR_H
+        + CARD2_MATRIX_GAP
+    )
     header_h = max(
         CARD2_AVATAR_TOP + CARD2_AVATAR,
-        CARD2_AVATAR_TOP + matrix_h - CARD2_MATRIX_PAD,
+        matrix_y + matrix_h - CARD2_MATRIX_PAD,
     )
     height = (
         header_h
@@ -1462,6 +1470,11 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
         icon = _load_ui_texture(icon_name)
         if icon is None:
             continue
+        # 裁掉素材上下的透明/半透明边，让可见内容按名字条高度显示
+        alpha = icon.getchannel("A")
+        bbox = alpha.point(lambda p: 255 if p >= _ICON_CROP_ALPHA else 0).getbbox()
+        if bbox is not None:
+            icon = icon.crop(bbox)
         icon_h = CARD2_NAME_BAR_H
         icon_w = max(1, round(icon.width * icon_h / icon.height))
         icon = icon.resize((icon_w, icon_h), Image.Resampling.LANCZOS)
@@ -1500,10 +1513,8 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
         )
         prev_right = icon_x + icon_w
         prev_w = icon_w
-    # 等级分布：右上角（保持大小）
-    _draw_grade_matrix(
-        img, draw, CARD2_AVATAR_TOP, grade_counts, right=width - CARD2_PAD
-    )
+    # 等级分布：图标行下方（保持右对齐）
+    _draw_grade_matrix(img, draw, matrix_y, grade_counts, right=width - CARD2_PAD)
 
     y = header_h + 24
 
