@@ -147,9 +147,10 @@ dmypy.json
 .ruff_cache/
 .zcode/
 .vscode/
-# 运行时数据（含用户绑定存档 / 曲绘缓存，切勿提交）
+# 运行时数据（含用户绑定存档 / 曲绘缓存 / 谱面文件，切勿提交）
 data/
 qwwshs/plugins/bm/images/
+qwwshs/plugins/bm/chart/
 qwwshs/plugins/bm/bm.zip
 qwwshs/plugins/bm/bm-score(4).html
 qwwshs/plugins/bm/Berry Melody定数表/
