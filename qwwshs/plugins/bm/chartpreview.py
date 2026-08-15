@@ -72,6 +72,10 @@ _NOTE_THICKNESS = 7
 _MIN_NOTE_PIXELS = 2
 # 素材主色统计时视为不透明的 alpha 下限
 _ALPHA_THRESHOLD = 100
+# Tap/Drag 素材渲染的固定高度（像素，宽度可拉伸、不保比例）
+_NOTE_FIXED_HEIGHT = 8
+# Slide（Hold）透明度（0-255，191 = 75%）
+_HOLD_ALPHA = round(255 * 0.75)
 
 _DEFAULT_BPM = 120.0
 # 结尾超出分钟分界的容差（秒），超出视为需要新一栏
@@ -897,14 +901,23 @@ def _draw_notes(
     notes: list[Note],
     columns: int,
 ) -> None:
-    """音符绘制：note/ 素材优先，缺失时回退彩色条。"""
+    """音符绘制：note/ 素材优先，缺失时回退彩色条。
+
+    Hold 统一画到透明叠加层（75% 透明度）最后合成，保证盖在黑线上、
+    被 Tap/Drag 盖住。
+    """
+    hold_overlay: Image.Image | None = None
     for note in notes:
         if note.kind == "Hold":
-            _draw_hold(draw, note, columns)
+            if hold_overlay is None:
+                hold_overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+            _draw_hold_polygon(ImageDraw.Draw(hold_overlay), note, columns)
         else:
             for point in note.points:
                 if not _draw_note_image(image, note.kind, point, columns):
                     _draw_note_bar(draw, point, NOTE_COLORS[note.kind], columns)
+    if hold_overlay is not None:
+        image.paste(hold_overlay, (0, 0), hold_overlay)
 
 
 def _note_pixel_width(width: float) -> float:
@@ -971,10 +984,7 @@ def _draw_note_image(
     point: tuple[float, float, float],
     columns: int,
 ) -> bool:
-    """用 note/ 素材画 Tap/Drag：按音符宽度等比缩放（高度 1/3），居中粘贴。
-
-    Drag（wipe）染黄色。
-    """
+    """用 note/ 素材画 Tap/Drag：宽度拉伸到音符宽度，高度固定。"""
     note_image = _note_image(kind)
     if note_image is None:
         return False
@@ -986,14 +996,12 @@ def _draw_note_image(
     col = _note_col(t, columns)
     px = round(_note_x(x1, col))
     py = round(_note_y(t, col))
-    target_w = _note_pixel_width(width)
+    target_w = round(_note_pixel_width(width))
     if target_w <= _MIN_NOTE_PIXELS:
         return False
-    # 高度缩减为等比高度的 1/3
-    target_h = max(
-        1, round(target_w * note_image.height / note_image.width / 3)
+    resized = note_image.resize(
+        (target_w, _NOTE_FIXED_HEIGHT), Image.Resampling.LANCZOS
     )
-    resized = note_image.resize((round(target_w), target_h), Image.Resampling.LANCZOS)
     image.paste(resized, (px - resized.width // 2, py - resized.height // 2), resized)
     return True
 
@@ -1018,12 +1026,12 @@ def _draw_note_bar(
     )
 
 
-def _draw_hold(
+def _draw_hold_polygon(
     draw: ImageDraw.ImageDraw, note: Note, columns: int
 ) -> None:
-    """Slide（Hold）渲染：纯色块逻辑——中心路径左右各扩半宽画填充多边形。
+    """Slide（Hold）纯色块：中心路径左右各扩半宽画填充多边形。
 
-    颜色取 Hold 素材主色（素材是平条，直接用色块渲染），缺失回退红。
+    颜色取 Hold 素材主色（素材是平条），透明度由叠加层控制。
     """
     color = _hold_color()
     half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 4
@@ -1037,12 +1045,13 @@ def _draw_hold(
         if len(pts) == 1:
             px, py, half = pts[0]
             draw.ellipse(
-                (px - half, py - half, px + half, py + half), fill=color
+                (px - half, py - half, px + half, py + half),
+                fill=(*color, _HOLD_ALPHA),
             )
             continue
         lefts = [(px - half, py) for px, py, half in pts]
         rights = [(px + half, py) for px, py, half in reversed(pts)]
-        draw.polygon(lefts + rights, fill=color)
+        draw.polygon(lefts + rights, fill=(*color, _HOLD_ALPHA))
 
 
 def _note_col(t: float, columns: int) -> int:
