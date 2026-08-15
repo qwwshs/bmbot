@@ -1004,16 +1004,18 @@ def _load_avatar(name: str | None) -> Image.Image | None:
     return _avatar_cache[name]
 
 
-def _draw_grade_matrix(
+def _draw_grade_matrix(  # noqa: PLR0913, PLR0917
     img: Image.Image,
     draw: ImageDraw.ImageDraw,
     y: int,
     grade_counts: dict,
     right: int | None = None,
+    left: int | None = None,
 ) -> int:
     """等级分布表：字号与曲名相同（CARD2_TITLE_MAX），斜纹.png 圆角背景。
 
     ``right`` 为空时靠左（CARD2_PAD），否则整表右对齐到 ``right``；
+    ``left`` 与 ``right`` 同时给定时矩阵拉伸到该区间（列宽放大）；
     等级行用文字（等级色）。
     返回外框底边 y。
     """
@@ -1022,8 +1024,13 @@ def _draw_grade_matrix(
     col_w = 132
     row_h = 44
     pad = CARD2_MATRIX_PAD
-    matrix_w = label_w + len(ALL_DIFFS) * col_w
-    left = CARD2_PAD if right is None else right - matrix_w
+    if left is not None and right is not None:
+        matrix_w = right - left
+        col_w = (matrix_w - label_w) // len(ALL_DIFFS)
+        matrix_w = label_w + len(ALL_DIFFS) * col_w
+    else:
+        matrix_w = label_w + len(ALL_DIFFS) * col_w
+        left = CARD2_PAD if right is None else right - matrix_w
     box_left = left - pad
     box_top = y - pad
     box_w = matrix_w + 2 * pad
@@ -1508,8 +1515,10 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917
         )
         prev_right = icon_x + icon_w
         prev_w = icon_w
-    # 等级分布：玩家名下方（左对齐）
-    _draw_grade_matrix(img, draw, matrix_y, grade_counts)
+    # 等级分布：玩家名下方，从左边缘到名字条右边缘（列宽拉伸）
+    _draw_grade_matrix(
+        img, draw, matrix_y, grade_counts, right=CARD2_NAME_BAR_W, left=CARD2_PAD
+    )
 
     y = header_h + 24
 
