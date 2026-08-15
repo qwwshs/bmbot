@@ -137,7 +137,7 @@ _MIN_NOTE_PIXELS = 2
 # 素材主色统计时视为不透明的 alpha 下限
 _ALPHA_THRESHOLD = 100
 # Tap/Drag 素材渲染的固定高度（像素，游戏里高度不随宽度变化）
-_NOTE_FIXED_HEIGHT = 8
+_NOTE_FIXED_HEIGHT = round(8 * 4 / 3)  # 8px 放大 1/3
 # Slide（Hold）透明度（0-255，191 = 75%）
 _HOLD_ALPHA = round(255 * 0.75)
 
