@@ -1266,9 +1266,12 @@ def _draw_hold_polygon(
         groups.setdefault(col, []).append((px, _note_y(t, col), half))
     for pts in groups.values():
         if len(pts) == 1:
+            # 跨分栏边界的单点组：画横向小条（避免出现圆球）
             px, py, half = pts[0]
-            draw.ellipse(
-                (px - half, py - half, px + half, py + half),
+            thickness = _NOTE_THICKNESS / 2
+            draw.rounded_rectangle(
+                (px - half, py - thickness, px + half, py + thickness),
+                radius=3,
                 fill=(*color, _HOLD_ALPHA),
             )
             continue
