@@ -56,7 +56,12 @@ from .chartpreview import (
     render_chart_preview,
 )
 from .constants import DATA_DIR, ConstantsError, get_song_constants
-from .decrypt import DecryptError, parse_account_data
+from .decrypt import (
+    DecryptError,
+    build_save_text,
+    generate_save_key,
+    parse_account_data,
+)
 from .rating import ALL_DIFFS, compute_rating, normalize_n10_name, parse_scores
 from .render import (
     render_card,
@@ -577,24 +582,34 @@ _EXPORT_DIR = _DATA_DIR / "exports"
 
 @bm_export.handle()
 async def handle_export(bot: Bot, event: MessageEvent) -> None:
-    """导出自己的存档（游戏可直接导入的 FormalSave.txt，原文件原样返回）。"""
+    """导出自己的存档（游戏可直接导入的 FormalSave.txt）。
+
+    绑定时保存过原始文件则原样返回；旧绑定未保存原始文件的，
+    用新生成的 RSA 密钥把账号 JSON 重新加密为游戏格式导出。
+    """
     qq = str(event.user_id)
     binding = _bindings.get(qq)
     if binding is None:
         await bm_export.finish("❌ 尚未绑定存档，请先 /bmbind 绑定后再导出")
-    raw_b64 = binding.get("raw_b64") if binding else None
-    if not raw_b64:
-        await bm_export.finish(
-            "❌ 当前存档是旧版绑定的（未保存原始文件），无法导出。\n"
-            "请重新 /bmbind 发送一次存档文件，之后即可 /bmexport 导出"
-        )
-    try:
-        raw = base64.b64decode(raw_b64)
-    except ValueError:
-        await bm_export.finish("❌ 存档数据损坏，请重新 /bmbind")
     _EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = _EXPORT_DIR / f"{qq}.txt"
-    path.write_bytes(raw)
+    note = ""
+    raw_b64 = binding.get("raw_b64")
+    if raw_b64:
+        try:
+            raw = base64.b64decode(raw_b64)
+        except ValueError:
+            await bm_export.finish("❌ 存档数据损坏，请重新 /bmbind")
+        path.write_bytes(raw)
+    else:
+        # 旧绑定：用新密钥重新加密（游戏用存档内嵌私钥解密，新密钥可直接导入）
+        try:
+            key = generate_save_key()
+            path.write_text(build_save_text(key, binding["data"]), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"导出重新加密失败: {exc}")
+            await bm_export.finish(f"❌ 重新加密导出失败：{exc}")
+        note = "（旧绑定存档，已用新密钥重新加密，可直接导入游戏）"
     try:
         if isinstance(event, GroupMessageEvent):
             await bot.call_api(
@@ -616,7 +631,7 @@ async def handle_export(bot: Bot, event: MessageEvent) -> None:
         await bm_export.finish(f"❌ 上传存档文件失败：{exc}")
     path.unlink(missing_ok=True)
     await bm_export.finish(
-        "✅ 已导出存档（FormalSave.txt）\n"
+        f"✅ 已导出存档（FormalSave.txt）{note}\n"
         "保存到游戏存档目录后重进游戏即可导入：\n"
         "Android/data/com.skywaystudio.BerryMelody/files/"
     )

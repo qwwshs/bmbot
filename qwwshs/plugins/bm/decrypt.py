@@ -164,3 +164,58 @@ def _parse_json_lenient(text: str) -> dict:
     if not isinstance(data, dict):
         raise DecryptError("解密结果不是有效的账号数据")
     return data
+
+
+def _private_key_to_xml(key: rsa.RSAPrivateKey) -> str:
+    """RSA 私钥 → .NET ``RSAKeyValue`` XML（游戏存档头格式）。"""
+    numbers = key.private_numbers()
+    public = numbers.public_numbers
+
+    def b64_bytes(value: int) -> str:
+        return base64.b64encode(
+            value.to_bytes((value.bit_length() + 7) // 8, "big")
+        ).decode("ascii")
+
+    return (
+        "<RSAKeyValue>"
+        f"<Modulus>{b64_bytes(public.n)}</Modulus>"
+        f"<Exponent>{b64_bytes(public.e)}</Exponent>"
+        f"<P>{b64_bytes(numbers.p)}</P>"
+        f"<Q>{b64_bytes(numbers.q)}</Q>"
+        f"<DP>{b64_bytes(numbers.dmp1)}</DP>"
+        f"<DQ>{b64_bytes(numbers.dmq1)}</DQ>"
+        f"<InverseQ>{b64_bytes(numbers.iqmp)}</InverseQ>"
+        f"<D>{b64_bytes(numbers.d)}</D>"
+        "</RSAKeyValue>"
+    )
+
+
+def generate_save_key() -> rsa.RSAPrivateKey:
+    """生成新的 2048 位存档密钥（游戏用存档内嵌私钥解密，新密钥可直接导入）。"""
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def build_save_text(key: rsa.RSAPrivateKey, account: dict) -> str:
+    """把账号 JSON 加密为游戏可导入的存档文本。
+
+    格式与游戏导出一致：``<RSAKeyValue>...</RSAKeyValue>`` +
+    ``<SecKey>`` + base64 密文。加密用 OAEP-SHA1 分块（与 HTML 工具解密
+    存档时的首选填充一致），每块不超过 OAEP-SHA1 上限。
+    """
+    plaintext = json.dumps(account, ensure_ascii=False).encode("utf-8")
+    block_size = key.key_size // 8
+    # OAEP-SHA1 每块最大明文 = 块大小 - 2*hash - 2
+    max_plain = block_size - 2 * hashes.SHA1.digest_size - 2
+    oaep = padding.OAEP(
+        mgf=padding.MGF1(algorithm=hashes.SHA1()),
+        algorithm=hashes.SHA1(),
+        label=None,
+    )
+    cipher = bytearray()
+    for offset in range(0, len(plaintext), max_plain):
+        chunk = plaintext[offset : offset + max_plain]
+        cipher.extend(key.public_key().encrypt(chunk, oaep))
+    return (
+        f"{_private_key_to_xml(key)}<SecKey>"
+        f"{base64.b64encode(bytes(cipher)).decode('ascii')}</SecKey>"
+    )
