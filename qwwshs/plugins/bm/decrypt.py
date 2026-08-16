@@ -199,23 +199,21 @@ def build_save_text(key: rsa.RSAPrivateKey, account: dict) -> str:
     """把账号 JSON 加密为游戏可导入的存档文本。
 
     格式与游戏导出一致：``<RSAKeyValue>...</RSAKeyValue>`` +
-    ``<SecKey>`` + base64 密文。加密用 OAEP-SHA1 分块（与 HTML 工具解密
-    存档时的首选填充一致），每块不超过 OAEP-SHA1 上限。
+    ``<SecKey>`` + base64 密文（无闭合标签，与游戏写入格式一致）。
+
+    填充与游戏一致：反汇编 libil2cpp.so 确认游戏调用
+    ``RSACryptoServiceProvider.Encrypt(data, fOAEP=false)``，即 PKCS1v15
+    （2048 位密钥每块明文上限 245 字节）。
     """
     plaintext = json.dumps(account, ensure_ascii=False).encode("utf-8")
     block_size = key.key_size // 8
-    # OAEP-SHA1 每块最大明文 = 块大小 - 2*hash - 2
-    max_plain = block_size - 2 * hashes.SHA1.digest_size - 2
-    oaep = padding.OAEP(
-        mgf=padding.MGF1(algorithm=hashes.SHA1()),
-        algorithm=hashes.SHA1(),
-        label=None,
-    )
+    # PKCS1v15 每块最大明文 = 块大小 - 11
+    max_plain = block_size - 11
     cipher = bytearray()
     for offset in range(0, len(plaintext), max_plain):
         chunk = plaintext[offset : offset + max_plain]
-        cipher.extend(key.public_key().encrypt(chunk, oaep))
+        cipher.extend(key.public_key().encrypt(chunk, padding.PKCS1v15()))
     return (
         f"{_private_key_to_xml(key)}<SecKey>"
-        f"{base64.b64encode(bytes(cipher)).decode('ascii')}</SecKey>"
+        f"{base64.b64encode(bytes(cipher)).decode('ascii')}"
     )
