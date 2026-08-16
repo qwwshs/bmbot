@@ -5,6 +5,7 @@
 - ``/bmbind``：绑定 Berry Melody 存档。发送该命令后，监测该 QQ 发送的下一个
   ``.txt`` 文件（聊天文件或群文件上传均可），读取文件内容作为账号数据
   （从 ``<RSAKeyValue>`` 开始的完整存档，或已解密的 JSON），5 分钟超时
+- ``/bmexport``：把绑定过的存档原样导出为游戏可导入的 FormalSave.txt
 - ``/bmrating``：以图片输出该玩家的 Rating 查分
 """
 
@@ -83,7 +84,7 @@ if TYPE_CHECKING:
 __plugin_meta__ = PluginMetadata(
     name="Berry Melody 查分",
     description="Berry Melody 音游查分：绑定 txt 存档 / 查分图 / 单曲查询",
-    usage="/bmhelp\n/bmbind\n/bmrating\n/bmsong <曲名>",
+    usage="/bmhelp\n/bmbind\n/bmexport\n/bmrating\n/bmsong <曲名>",
 )
 
 
@@ -114,7 +115,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.7.17"
+BM_VERSION = "0.7.18"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -280,12 +281,15 @@ def _save_bindings() -> None:
         tmp.replace(path)
 
 
-def _store_binding(qq: str, data: dict) -> str:
-    _bindings[qq] = {
+def _store_binding(qq: str, data: dict, raw_b64: str | None = None) -> str:
+    binding: dict = {
         "data": data,
         "name": str(data.get("AccountName") or ""),
         "bind_time": time.time(),
     }
+    if raw_b64:
+        binding["raw_b64"] = raw_b64
+    _bindings[qq] = binding
     _save_bindings()
     name = str(data.get("AccountName") or "未知玩家")
     return f"✅ 绑定成功！\n玩家：{name}\n发送 /bmrating 查看 Rating"
@@ -439,7 +443,11 @@ async def _read_file(bot: Bot, data: dict) -> bytes:
 
 
 async def _process_file(bot: Bot, qq: str, data: dict) -> str:
-    """读取文件内容并绑定账号，返回提示信息。"""
+    """读取文件内容并绑定账号，返回提示信息。
+
+    存档为 RSA 格式时把原始文件字节存为 base64（供 /bmexport 原样导出，
+    保证游戏可直接导入，无需重新加密）。
+    """
     try:
         raw = await _read_file(bot, data)
         content = _decode_text(raw)
@@ -449,11 +457,15 @@ async def _process_file(bot: Bot, qq: str, data: dict) -> str:
         account = parse_account_data(content)
     except DecryptError as exc:
         return f"❌ 绑定失败：{exc}"
-    return _store_binding(qq, account)
+    raw_b64 = (
+        base64.b64encode(raw).decode("ascii") if "<RSAKeyValue>" in content else None
+    )
+    return _store_binding(qq, account, raw_b64)
 
 
 bm_help = on_command("bmhelp", priority=5, block=True)
 bm_bind = on_command("bmbind", priority=5, block=True)
+bm_export = on_command("bmexport", priority=5, block=True)
 bm_rating = on_command("bmrating", priority=5, block=True)
 bm_song = on_command("bmsong", priority=5, block=True)
 bm_version = on_command("bmbotversion", priority=5, block=True)
@@ -505,6 +517,7 @@ _HELP_TEXT = (
     "   ⑤ OPPO：导出方法同①安卓通用法\n"
     "   内容：从 <RSAKeyValue> 开始的完整存档（FormalSave.txt），\n"
     "   或已解密的 JSON 文本\n"
+    "/bmexport — 导出自己绑定过的存档（游戏可直接导入的 FormalSave.txt）\n"
     "/bmrating — 以图片输出你的 Rating 查分\n"
     "/bmratingstyle — 切换查分样式（新版/旧版）\n"
     "/bmsong <曲名> — 单曲查询（支持模糊搜索）\n"
@@ -557,6 +570,56 @@ async def handle_bind(event: MessageEvent) -> None:
 @bm_version.handle()
 async def handle_version() -> None:
     await bm_version.finish(f"🤖 Berry Melody 查分 Bot v{BM_VERSION}")
+
+
+_EXPORT_DIR = _DATA_DIR / "exports"
+
+
+@bm_export.handle()
+async def handle_export(bot: Bot, event: MessageEvent) -> None:
+    """导出自己的存档（游戏可直接导入的 FormalSave.txt，原文件原样返回）。"""
+    qq = str(event.user_id)
+    binding = _bindings.get(qq)
+    if binding is None:
+        await bm_export.finish("❌ 尚未绑定存档，请先 /bmbind 绑定后再导出")
+    raw_b64 = binding.get("raw_b64") if binding else None
+    if not raw_b64:
+        await bm_export.finish(
+            "❌ 当前存档是旧版绑定的（未保存原始文件），无法导出。\n"
+            "请重新 /bmbind 发送一次存档文件，之后即可 /bmexport 导出"
+        )
+    try:
+        raw = base64.b64decode(raw_b64)
+    except ValueError:
+        await bm_export.finish("❌ 存档数据损坏，请重新 /bmbind")
+    _EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    path = _EXPORT_DIR / f"{qq}.txt"
+    path.write_bytes(raw)
+    try:
+        if isinstance(event, GroupMessageEvent):
+            await bot.call_api(
+                "upload_group_file",
+                group_id=event.group_id,
+                file=str(path),
+                name="FormalSave.txt",
+            )
+        else:
+            await bot.call_api(
+                "upload_private_file",
+                user_id=event.user_id,
+                file=str(path),
+                name="FormalSave.txt",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"导出上传失败: {exc}")
+        path.unlink(missing_ok=True)
+        await bm_export.finish(f"❌ 上传存档文件失败：{exc}")
+    path.unlink(missing_ok=True)
+    await bm_export.finish(
+        "✅ 已导出存档（FormalSave.txt）\n"
+        "保存到游戏存档目录后重进游戏即可导入：\n"
+        "Android/data/com.skywaystudio.BerryMelody/files/"
+    )
 
 
 @bm_file_watch.handle()
