@@ -70,11 +70,16 @@ SKIN_SETS: dict[str, dict[str, str]] = {
         "Tap": "Berry_Tap.png",
         "Drag": "Phi_Drag.png",
         "Hold": "Phi_Hold.png",
+        # Flick：flick_bg 为拉伸部分（Sprite border 279/279），flick 箭头居中不拉伸
+        "FlickBg": "flick_bg.png",
+        "FlickArrow": "flick.png",
     },
     "Lanota": {
         "Tap": "Berry_Tap.png",
         "Drag": "Lanota_Drag.png",
         "Hold": "Lanota_Hold.png",
+        # Flick：LanotaFlickDefault/Full 材质指向 flick2（1780x304，border 216/215）
+        "Flick": "flick2.png",
     },
     "qqx": {
         "Tap": "Berry_Tap.png",
@@ -138,6 +143,8 @@ _NOTE_THICKNESS = 7
 _MIN_NOTE_PIXELS = 2
 # 素材主色统计时视为不透明的 alpha 下限
 _ALPHA_THRESHOLD = 100
+# 提取 flick_bg 红色核心时的红色通道下限
+_RED_THRESHOLD = 60
 # Tap/Drag 素材渲染的固定高度（像素，游戏里高度不随宽度变化）
 _NOTE_FIXED_HEIGHT = round(8 * 4 / 3)  # 8px 放大 1/3
 # Dynamix Drag：中央装饰 dy_mid 不拉伸保持比例，细轨高度 = dy_mid 高度的 11/69
@@ -155,10 +162,12 @@ class Note:
     """单个音符；points 为 (时间秒, x1, 宽度) 序列（Hold 多段）。
 
     x1 是音符中心位置（≈ -1~1），宽度为条宽（x1 ± 宽/2 为条的两端）。
+    flick 标记 Drag 是否带 ``$ Flick = True`` 属性（渲染为 Flick 音符）。
     """
 
     kind: str
     points: list[tuple[float, float, float]] = field(default_factory=list)
+    flick: bool = False
 
 
 @dataclass(slots=True)
@@ -230,6 +239,7 @@ def parse_chart(path: Path) -> ChartData:
         Note(
             note.kind,
             [(_beat_to_time(t, changes, default_bpm), x, y) for t, x, y in note.points],
+            note.flick,
         )
         for note in raw_notes
     ]
@@ -379,8 +389,12 @@ def _parse_notes(lines: list[str]) -> list[Note]:
         stmt = raw_stmt.strip()
         if not stmt:
             continue
-        # 去掉 Drag 等附带的 :{ ... } 属性块（跨行，含 :\n{ 形式）
-        stmt = re.split(r":\s*\{", stmt, maxsplit=1)[0].strip()
+        # 提取 Drag 附带的 :{ ... } 属性块（跨行），块内 $ Flick = True 标记 Flick
+        flick = False
+        block_start = re.search(r":\s*\{", stmt)
+        if block_start:
+            flick = "Flick = True" in stmt[block_start.end() :]
+            stmt = stmt[: block_start.start()].strip()
         match = re.match(r"(\w+):\s*(.*)", stmt)
         if not match:
             continue
@@ -399,7 +413,7 @@ def _parse_notes(lines: list[str]) -> list[Note]:
             if points:
                 notes.append(Note("Hold", points))
         elif len(values) >= _NOTE_SEGMENT:
-            notes.append(Note(kind, [(values[0], values[1], values[2])]))
+            notes.append(Note(kind, [(values[0], values[1], values[2])], flick))
     return notes
 
 
@@ -1140,9 +1154,12 @@ def _draw_tap_drag(
         if note.kind == "Hold":
             continue
         for point in note.points:
-            if skin == "Dynamix" and note.kind == "Drag":
+            drawn = False
+            if note.flick:
+                drawn = _draw_flick_note(image, point, columns, skin)
+            if not drawn and skin == "Dynamix" and note.kind == "Drag":
                 drawn = _draw_dynamix_drag(image, point, columns)
-            else:
+            if not drawn:
                 drawn = _draw_note_image(image, note.kind, point, columns, skin)
             if not drawn:
                 _draw_note_bar(draw, point, NOTE_COLORS[note.kind], columns)
@@ -1153,26 +1170,43 @@ def _note_pixel_width(width: float) -> float:
     return max(1.0, width * (_COLUMN_WIDTH - 2 * _LANE_PAD))
 
 
-def _resize_note_stretched(
-    image: Image.Image, target_w: int, target_h: int
-) -> Image.Image:
-    """9-slice 拉伸：左右两端保留原样，只有中间 1 像素列拉伸到目标宽。
+# 各素材 Sprite 的 9-slice 左右边框（data.unity3d 的 m_Border，像素）。
+# 只有 Flick 素材按真实边框拉伸，其余 note 按「中间 1 像素」统一规则。
+_SPRITE_CAPS: dict[str, tuple[int, int]] = {
+    "flick_bg.png": (279, 279),
+    "flick2.png": (216, 215),
+}
 
-    宽度不变小（或未变宽）时退化为整体缩放；高度始终整体缩放到目标高。
+
+def _resize_note_stretched(
+    image: Image.Image,
+    target_w: int,
+    target_h: int,
+    left_cap: int | None = None,
+    right_cap: int | None = None,
+) -> Image.Image:
+    """9-slice 拉伸：左右 cap 保留原样，中间区域拉伸到目标宽。
+
+    cap 未指定时取中间 1 像素列（左右各半）；宽度不变小时退化整体缩放。
+    高度始终整体缩放到目标高。
     """
     src_w, src_h = image.size
     if target_w <= src_w:
         return image.resize((target_w, target_h), Image.Resampling.LANCZOS)
-    mid = src_w // 2
-    left = image.crop((0, 0, mid, src_h))
-    middle = image.crop((mid, 0, mid + 1, src_h))
-    right = image.crop((mid + 1, 0, src_w, src_h))
-    stretch = target_w - src_w + 1
-    middle = middle.resize((max(1, stretch), src_h), Image.Resampling.NEAREST)
+    if left_cap is None or right_cap is None:
+        mid = src_w // 2
+        left_cap, right_cap = mid, src_w - mid - 1
+    left_cap = min(left_cap, src_w // 2)
+    right_cap = min(right_cap, src_w - left_cap - 1)
+    left = image.crop((0, 0, left_cap, src_h))
+    middle = image.crop((left_cap, 0, src_w - right_cap, src_h))
+    right = image.crop((src_w - right_cap, 0, src_w, src_h))
+    middle_w = max(1, target_w - left_cap - right_cap)
+    middle = middle.resize((middle_w, src_h), Image.Resampling.NEAREST)
     out = Image.new("RGBA", (target_w, src_h))
     out.paste(left, (0, 0))
-    out.paste(middle, (mid, 0))
-    out.paste(right, (mid + stretch, 0))
+    out.paste(middle, (left_cap, 0))
+    out.paste(right, (target_w - right_cap, 0))
     return out.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
 
@@ -1180,23 +1214,52 @@ _note_image_cache: dict[tuple[str, str], Image.Image | None] = {}
 
 
 def _note_image(kind: str, skin: str = DEFAULT_SKIN) -> Image.Image | None:
-    """加载指定皮肤的素材，皮肤/类型缺失时回退 White 对应素材。"""
+    """加载指定皮肤的素材，皮肤/类型缺失时回退 White 对应素材。
+
+    Phigros 的 Tap 无独立贴图（游戏里由 flick_bg 红色部分染色生成）。
+    """
     key = (skin, kind)
     if key not in _note_image_cache:
         image = None
-        files = SKIN_SETS.get(skin, {})
-        for filename in (files.get(kind), SKIN_SETS[DEFAULT_SKIN].get(kind)):
-            if not filename:
-                continue
-            path = NOTE_DIR / filename
-            if path.exists():
-                try:
-                    image = Image.open(path).convert("RGBA")
-                except OSError:
-                    image = None
-                break
+        if skin == "Phigros" and kind == "Tap":
+            image = _phigros_tap_texture()
+        if image is None:
+            files = SKIN_SETS.get(skin, {})
+            for filename in (files.get(kind), SKIN_SETS[DEFAULT_SKIN].get(kind)):
+                if not filename:
+                    continue
+                path = NOTE_DIR / filename
+                if path.exists():
+                    try:
+                        image = Image.open(path).convert("RGBA")
+                    except OSError:
+                        image = None
+                    break
         _note_image_cache[key] = image
     return _note_image_cache[key]
+
+
+@lru_cache(maxsize=1)
+def _phigros_tap_texture() -> Image.Image | None:
+    """生成 Phigros Tap 素材：flick_bg 的红色核心染成 Tap 蓝（白色光晕保留）。"""
+    path = NOTE_DIR / "flick_bg.png"
+    if not path.exists():
+        return None
+    try:
+        base = Image.open(path).convert("RGBA")
+    except OSError:
+        return None
+    pixels = list(base.getdata())
+    blue = NOTE_COLORS["Tap"]
+    recolored = [
+        (*blue, alpha)
+        if (r > _RED_THRESHOLD and r > g and r > b)
+        else (r, g, b, alpha)
+        for r, g, b, alpha in pixels
+    ]
+    out = Image.new("RGBA", base.size)
+    out.putdata(recolored)
+    return out
 
 
 _tinted_cache: dict[tuple[str, str, tuple[int, int, int]], Image.Image] = {}
@@ -1296,6 +1359,53 @@ def _draw_dynamix_drag(
     )
     image.paste(mid, (px - mid.width // 2, py - mid.height // 2), mid)
     return True
+
+
+def _draw_flick_note(
+    image: Image.Image,
+    point: tuple[float, float, float],
+    columns: int,
+    skin: str = DEFAULT_SKIN,
+) -> bool:
+    """Flick 音符：Phigros = flick_bg 拉伸 + flick 箭头居中（不拉伸）；
+    Lanota = flick2 拉伸。皮肤无 flick 素材时返回 False 回退普通 Drag。"""
+    t, x1, width = point
+    col = _note_col(t, columns)
+    px = round(_note_x(x1, col))
+    py = round(_note_y(t, col))
+    target_w = round(_note_pixel_width(width))
+    if target_w <= _MIN_NOTE_PIXELS:
+        return False
+    if skin == "Phigros":
+        bg = _note_image("FlickBg", skin)
+        arrow = _note_image("FlickArrow", skin)
+        if bg is None or arrow is None:
+            return False
+        caps = _SPRITE_CAPS.get("flick_bg.png")
+        bar = _resize_note_stretched(
+            bg, target_w, _NOTE_FIXED_HEIGHT, caps[0], caps[1]
+        )
+        image.paste(
+            bar, (px - bar.width // 2, py - bar.height // 2), bar
+        )
+        # 箭头原尺寸居中，不参与拉伸
+        image.paste(
+            arrow, (px - arrow.width // 2, py - arrow.height // 2), arrow
+        )
+        return True
+    if skin == "Lanota":
+        tex = _note_image("Flick", skin)
+        if tex is None:
+            return False
+        caps = _SPRITE_CAPS.get("flick2.png")
+        resized = _resize_note_stretched(
+            tex, target_w, _NOTE_FIXED_HEIGHT, caps[0], caps[1]
+        )
+        image.paste(
+            resized, (px - resized.width // 2, py - resized.height // 2), resized
+        )
+        return True
+    return False
 
 
 def _draw_note_bar(
