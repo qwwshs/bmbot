@@ -65,7 +65,8 @@ def _decode_plaintext(plaintext: bytes) -> str:
         return plaintext.decode("utf-16")
     if len(plaintext) > _UTF16_MIN_LEN:
         odd_bytes = plaintext[1::2]
-        if odd_bytes and sum(b == 0 for b in odd_bytes) / len(odd_bytes) > _UTF16_ODD_NUL_RATIO:
+        odd_nul_ratio = sum(b == 0 for b in odd_bytes) / len(odd_bytes)
+        if odd_bytes and odd_nul_ratio > _UTF16_ODD_NUL_RATIO:
             return plaintext.decode("utf-16-le")
     return plaintext.decode("utf-8", errors="replace")
 
