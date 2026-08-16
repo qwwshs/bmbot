@@ -25,6 +25,8 @@ class DecryptError(Exception):
 
 # 密文最短长度（RSA 块 base64 后至少百字符级别，过短说明粘贴不完整）
 _MIN_CIPHER_LEN = 100
+# UTF-16 明文检测的最短长度（太短无法可靠判断）
+_UTF16_MIN_LEN = 40
 
 
 def parse_account_data(text: str) -> dict:
@@ -51,6 +53,21 @@ def parse_account_data(text: str) -> dict:
     )
 
 
+def _decode_plaintext(plaintext: bytes) -> str:
+    """解密明文解码：检测 UTF-16（BOM 或奇数位大量 NUL），否则按 UTF-8。
+
+    游戏明文为 UTF-16LE 编码的 JSON（中文等非 ASCII 字符若按 UTF-8 解码
+    会错乱成 ``\\`` 等字符破坏 JSON 结构，如 ``"风尘"`` → ``"Θ\\"``）。
+    """
+    if plaintext.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return plaintext.decode("utf-16")
+    if len(plaintext) > _UTF16_MIN_LEN:
+        odd_bytes = plaintext[1::2]
+        if odd_bytes and sum(b == 0 for b in odd_bytes) / len(odd_bytes) > 0.5:
+            return plaintext.decode("utf-16-le")
+    return plaintext.decode("utf-8", errors="replace")
+
+
 def decrypt_save(text: str) -> dict:
     """解密完整存档文本并返回账号 JSON。"""
     key_xml, cipher = _split_key_and_cipher(text)
@@ -67,7 +84,7 @@ def decrypt_save(text: str) -> dict:
     for offset in range(0, len(raw), block_size):
         chunk = bytes(raw[offset : offset + block_size])
         plaintext.extend(_decrypt_block(private_key, chunk))
-    decoded = plaintext.decode("utf-8", errors="replace")
+    decoded = _decode_plaintext(bytes(plaintext))
     decoded = re.sub(r"[\x00-\x1F\x7F-\x9F]", "", decoded)
     return _parse_json_lenient(decoded)
 
