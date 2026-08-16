@@ -27,6 +27,8 @@ class DecryptError(Exception):
 _MIN_CIPHER_LEN = 100
 # UTF-16 明文检测的最短长度（太短无法可靠判断）
 _UTF16_MIN_LEN = 40
+# UTF-16LE 判定阈值：奇数位（高字节）为 NUL 的比例下限
+_UTF16_ODD_NUL_RATIO = 0.5
 
 
 def parse_account_data(text: str) -> dict:
@@ -63,7 +65,7 @@ def _decode_plaintext(plaintext: bytes) -> str:
         return plaintext.decode("utf-16")
     if len(plaintext) > _UTF16_MIN_LEN:
         odd_bytes = plaintext[1::2]
-        if odd_bytes and sum(b == 0 for b in odd_bytes) / len(odd_bytes) > 0.5:
+        if odd_bytes and sum(b == 0 for b in odd_bytes) / len(odd_bytes) > _UTF16_ODD_NUL_RATIO:
             return plaintext.decode("utf-16-le")
     return plaintext.decode("utf-8", errors="replace")
 
