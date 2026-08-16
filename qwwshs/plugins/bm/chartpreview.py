@@ -1009,7 +1009,10 @@ def render_chart_preview(
     _draw_title(draw, width, chart, display_name)
     _draw_separators(draw, columns, height)
     _draw_black_lines(image, chart.black_lines, columns)
-    _draw_notes(image, draw, chart.notes, columns, skin)
+    if _draw_hold_layer(image, chart.notes, columns, skin):
+        # 跨栏 Slide 画完整多边形后，重画分隔线盖住越界部分
+        _draw_separators(draw, columns, height)
+    _draw_tap_drag(image, draw, chart.notes, columns, skin)
 
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
@@ -1098,17 +1101,15 @@ def _group_by_column(
     return groups
 
 
-def _draw_notes(
+def _draw_hold_layer(
     image: Image.Image,
-    draw: ImageDraw.ImageDraw,
     notes: list[Note],
     columns: int,
     skin: str = DEFAULT_SKIN,
-) -> None:
-    """音符绘制：Slide（Hold）在底层，Tap/Drag 在其上方。
+) -> bool:
+    """绘制全部 Slide（Hold）到叠加层并合成，返回是否画了 Hold。
 
-    Hold 逐个 alpha_composite 到叠加层（重叠处透明度加深），
-    最后合成，再画 Tap/Drag；素材缺失时回退彩色条。
+    每个 Hold 画完整多边形（跨栏连续，不拆分），重叠处透明度累加。
     """
     hold_overlay: Image.Image | None = None
     for note in notes:
@@ -1119,6 +1120,18 @@ def _draw_notes(
         _draw_hold_on_layer(hold_overlay, note, columns, skin)
     if hold_overlay is not None:
         image.paste(hold_overlay, (0, 0), hold_overlay)
+        return True
+    return False
+
+
+def _draw_tap_drag(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    notes: list[Note],
+    columns: int,
+    skin: str = DEFAULT_SKIN,
+) -> None:
+    """绘制 Tap/Drag（在 Slide 与分隔线之上）；素材缺失时回退彩色条。"""
     for note in notes:
         if note.kind == "Hold":
             continue
@@ -1252,30 +1265,48 @@ def _draw_hold_on_layer(
     columns: int,
     skin: str = DEFAULT_SKIN,
 ) -> None:
-    """把一个 Slide（Hold）画到叠加层：alpha_composite 累加。
+    """把一个 Slide（Hold）画到叠加层，alpha 逐层累加。
 
-    重叠的 Hold 透明度逐层加深（50% + 50% → 75%）。
+    跨分栏处插入边界点，每列的多边形都延伸到栏边界（避免截断）。
     每个 Hold 画到自身包围盒大小的图层上再合成，避免整图开销。
     """
     color = _hold_color(skin)
     half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 2
+    # 1) 跨栏边界处插入 (t, x, 宽, 列) 点：边界点同时加入两列，
+    #    使每列的多边形都延伸到栏边界（避免截断）
+    raw = list(note.points)
+    expanded: list[tuple[float, float, float, int]] = []
+    for p1, p2 in zip(raw, raw[1:]):
+        c1 = _note_col(p1[0], columns)
+        c2 = _note_col(p2[0], columns)
+        expanded.append((p1[0], p1[1], p1[2], c1))
+        if c1 != c2:
+            boundary = (c1 + 1) * _SEGMENT_SECONDS
+            frac = (boundary - p1[0]) / (p2[0] - p1[0])
+            x_b = p1[1] + (p2[1] - p1[1]) * frac
+            w_b = p1[2] + (p2[2] - p1[2]) * frac
+            expanded.append((boundary, x_b, w_b, c1))  # 上一列末尾（栏顶）
+            expanded.append((boundary, x_b, w_b, c2))  # 下一列开头（栏底）
+    if raw:
+        expanded.append(
+            (raw[-1][0], raw[-1][1], raw[-1][2], _note_col(raw[-1][0], columns))
+        )
+    # 2) 按列分组转像素坐标
     groups: dict[int, list[tuple[float, float, float]]] = {}
-    for t, x1, width in note.points:
-        col = _note_col(t, columns)
-        px = _note_x(x1, col)
+    for t, x, width, col in expanded:
+        px = _note_x(x, col)
         half = width * half_scale
         groups.setdefault(col, []).append((px, _note_y(t, col), half))
     if not groups:
         return
-    # 包围盒（单点组还要算条厚）
+    # 3) 包围盒（±1px 抗锯齿余量）
     xs = [px - half for pts in groups.values() for px, py, half in pts]
     xs += [px + half for pts in groups.values() for px, py, half in pts]
     ys = [py for pts in groups.values() for px, py, half in pts]
-    thickness = _NOTE_THICKNESS / 2
-    for pts in groups.values():
-        if len(pts) == 1:
-            _, py, _ = pts[0]
-            ys.extend((py - thickness, py + thickness))
+    if len(note.points) == 1:
+        thickness = _NOTE_THICKNESS / 2
+        _, py, _ = next(iter(groups.values()))[0]
+        ys.extend((py - thickness, py + thickness))
     left, top = max(0, int(min(xs)) - 1), max(0, int(min(ys)) - 1)
     right, bottom = (
         min(overlay.width - 1, int(max(xs)) + 1),
@@ -1289,8 +1320,9 @@ def _draw_hold_on_layer(
     ldraw = ImageDraw.Draw(layer)
     for pts in groups.values():
         if len(pts) == 1:
-            # 跨分栏边界的单点组：画横向小条（避免出现圆球）
+            # 单点组：横向小条（避免出现圆球）
             px, py, half = pts[0]
+            thickness = _NOTE_THICKNESS / 2
             ldraw.rounded_rectangle(
                 (
                     px - half - left,
