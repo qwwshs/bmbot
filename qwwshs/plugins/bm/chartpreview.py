@@ -1107,8 +1107,8 @@ def _draw_notes(
 ) -> None:
     """音符绘制：Slide（Hold）在底层，Tap/Drag 在其上方。
 
-    Hold 先画到透明叠加层（75% 透明度）并合成，再画 Tap/Drag；
-    素材缺失时回退彩色条。
+    Hold 逐个 alpha_composite 到叠加层（重叠处透明度加深），
+    最后合成，再画 Tap/Drag；素材缺失时回退彩色条。
     """
     hold_overlay: Image.Image | None = None
     for note in notes:
@@ -1116,7 +1116,7 @@ def _draw_notes(
             continue
         if hold_overlay is None:
             hold_overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-        _draw_hold_polygon(ImageDraw.Draw(hold_overlay), note, columns, skin)
+        _draw_hold_on_layer(hold_overlay, note, columns, skin)
     if hold_overlay is not None:
         image.paste(hold_overlay, (0, 0), hold_overlay)
     for note in notes:
@@ -1246,15 +1246,16 @@ def _draw_note_bar(
     )
 
 
-def _draw_hold_polygon(
-    draw: ImageDraw.ImageDraw,
+def _draw_hold_on_layer(
+    overlay: Image.Image,
     note: Note,
     columns: int,
     skin: str = DEFAULT_SKIN,
 ) -> None:
-    """Slide（Hold）纯色块：中心路径左右各扩半宽画填充多边形。
+    """把一个 Slide（Hold）画到叠加层：alpha_composite 累加。
 
-    颜色取指定皮肤 Hold 素材主色（素材是平条），透明度由叠加层控制。
+    重叠的 Hold 透明度逐层加深（50% + 50% → 75%）。
+    每个 Hold 画到自身包围盒大小的图层上再合成，避免整图开销。
     """
     color = _hold_color(skin)
     half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 2
@@ -1264,20 +1265,50 @@ def _draw_hold_polygon(
         px = _note_x(x1, col)
         half = width * half_scale
         groups.setdefault(col, []).append((px, _note_y(t, col), half))
+    if not groups:
+        return
+    # 包围盒（单点组还要算条厚）
+    xs = [px - half for pts in groups.values() for px, py, half in pts]
+    xs += [px + half for pts in groups.values() for px, py, half in pts]
+    ys = [py for pts in groups.values() for px, py, half in pts]
+    thickness = _NOTE_THICKNESS / 2
+    for pts in groups.values():
+        if len(pts) == 1:
+            _, py, _ = pts[0]
+            ys.extend((py - thickness, py + thickness))
+    left, top = max(0, int(min(xs)) - 1), max(0, int(min(ys)) - 1)
+    right, bottom = (
+        min(overlay.width - 1, int(max(xs)) + 1),
+        min(overlay.height - 1, int(max(ys)) + 1),
+    )
+    if right <= left or bottom <= top:
+        return
+    layer = Image.new(
+        "RGBA", (right - left + 1, bottom - top + 1), (0, 0, 0, 0)
+    )
+    ldraw = ImageDraw.Draw(layer)
     for pts in groups.values():
         if len(pts) == 1:
             # 跨分栏边界的单点组：画横向小条（避免出现圆球）
             px, py, half = pts[0]
-            thickness = _NOTE_THICKNESS / 2
-            draw.rounded_rectangle(
-                (px - half, py - thickness, px + half, py + thickness),
+            ldraw.rounded_rectangle(
+                (
+                    px - half - left,
+                    py - thickness - top,
+                    px + half - left,
+                    py + thickness - top,
+                ),
                 radius=3,
                 fill=(*color, _HOLD_ALPHA),
             )
             continue
-        lefts = [(px - half, py) for px, py, half in pts]
-        rights = [(px + half, py) for px, py, half in reversed(pts)]
-        draw.polygon(lefts + rights, fill=(*color, _HOLD_ALPHA))
+        lefts = [(px - half - left, py - top) for px, py, half in pts]
+        rights = [
+            (px + half - left, py - top) for px, py, half in reversed(pts)
+        ]
+        ldraw.polygon(lefts + rights, fill=(*color, _HOLD_ALPHA))
+    region = overlay.crop((left, top, right + 1, bottom + 1))
+    overlay.paste(Image.alpha_composite(region, layer), (left, top))
 
 
 def _note_col(t: float, columns: int) -> int:
