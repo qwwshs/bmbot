@@ -1388,9 +1388,12 @@ def _draw_flick_note(
         image.paste(
             bar, (px - bar.width // 2, py - bar.height // 2), bar
         )
-        # 箭头原尺寸居中，不参与拉伸
+        # 箭头保持比例缩放到普通 note 高度（不参与横向拉伸），居中
+        arrow_h = _NOTE_FIXED_HEIGHT
+        arrow_w = max(1, round(arrow.width * arrow_h / arrow.height))
+        arrow_scaled = arrow.resize((arrow_w, arrow_h), Image.Resampling.LANCZOS)
         image.paste(
-            arrow, (px - arrow.width // 2, py - arrow.height // 2), arrow
+            arrow_scaled, (px - arrow_w // 2, py - arrow_h // 2), arrow_scaled
         )
         return True
     if skin == "Lanota":
