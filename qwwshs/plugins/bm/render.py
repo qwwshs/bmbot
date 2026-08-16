@@ -1552,7 +1552,7 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917, C901
         img.paste(icon, (icon_x, bar_top), icon)
         half_w = icon_w // 2
         mid_x = icon_x + half_w
-        # 左半：名称（字符高 = 图标高 1/2，半宽放不下时缩小）
+        # 左半：名称（字符高 = 图标高 1/2，右缘对齐底板中心）
         label_font = CARD2_NAME_BAR_H // 2
         while (
             label_font > CARD2_ICON_TEXT_MIN_FONT
@@ -1560,11 +1560,11 @@ def render_card_new(  # noqa: PLR0913, PLR0915, PLR0917, C901
         ):
             label_font -= 2
         draw.text(
-            (icon_x + half_w // 2, bar_top + icon_h // 2),
+            (mid_x, bar_top + icon_h // 2),
             label,
             font=_font(label_font, bold=True),
             fill=(255, 255, 255),
-            anchor="mm",
+            anchor="rm",
         )
         # 右半：数量（字符高 = 图标高 1/2，半宽放不下时缩小）
         count_font = CARD2_NAME_BAR_H // 2
