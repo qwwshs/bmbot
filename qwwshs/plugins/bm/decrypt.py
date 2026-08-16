@@ -199,20 +199,25 @@ def build_save_text(key: rsa.RSAPrivateKey, account: dict) -> str:
     """把账号 JSON 加密为游戏可导入的存档文本。
 
     格式与游戏导出一致：``<RSAKeyValue>...</RSAKeyValue>`` +
-    ``<SecKey>`` + base64 密文（无闭合标签，与游戏写入格式一致）。
+    ``<SecKey>`` + base64 密文（无闭合标签）。
 
-    填充与游戏一致：反汇编 libil2cpp.so 确认游戏调用
-    ``RSACryptoServiceProvider.Encrypt(data, fOAEP=false)``，即 PKCS1v15
-    （2048 位密钥每块明文上限 245 字节）。
+    填充与分块均与游戏一致（反汇编 libil2cpp.so 确认）：
+    - ``RSACryptoServiceProvider.Encrypt(data, fOAEP=false)`` = PKCS1v15
+    - 按 117 字符分块（游戏用 ``char[117]`` + String.CopyTo 逐块加密）；
+      含多字节字符导致超 PKCS1v15 上限（245 字节）时收缩该块
     """
-    plaintext = json.dumps(account, ensure_ascii=False).encode("utf-8")
-    block_size = key.key_size // 8
-    # PKCS1v15 每块最大明文 = 块大小 - 11
-    max_plain = block_size - 11
+    text = json.dumps(account, ensure_ascii=False)
+    max_plain = key.key_size // 8 - 11  # PKCS1v15 每块明文上限
     cipher = bytearray()
-    for offset in range(0, len(plaintext), max_plain):
-        chunk = plaintext[offset : offset + max_plain]
-        cipher.extend(key.public_key().encrypt(chunk, padding.PKCS1v15()))
+    offset = 0
+    while offset < len(text):
+        chunk = text[offset : offset + 117]
+        data = chunk.encode("utf-8")
+        while len(data) > max_plain and len(chunk) > 1:
+            chunk = chunk[:-1]
+            data = chunk.encode("utf-8")
+        cipher.extend(key.public_key().encrypt(bytes(data), padding.PKCS1v15()))
+        offset += len(chunk)
     return (
         f"{_private_key_to_xml(key)}<SecKey>"
         f"{base64.b64encode(bytes(cipher)).decode('ascii')}"
