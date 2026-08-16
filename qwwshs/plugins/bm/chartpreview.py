@@ -67,7 +67,8 @@ SKIN_SETS: dict[str, dict[str, str]] = {
     # 以下皮肤按材质 _MainTex 的 PathID 从 data.unity3d 提取的真实纹理
     # （同名纹理每个皮肤不同图集，如 "drag" 有 258x29/560x44/1780x304/1041x127 四版）
     "Phigros": {
-        "Tap": "Berry_Tap.png",
+        # Tap 是真实贴图（561x179，蓝核心+白边，与 flick_bg 同结构），非染色生成
+        "Tap": "Phi_Tap.png",
         "Drag": "Phi_Drag.png",
         "Hold": "Phi_Hold.png",
         # Flick：flick_bg 为拉伸部分（Sprite border 279/279），flick 箭头居中不拉伸
@@ -143,14 +144,20 @@ _NOTE_THICKNESS = 7
 _MIN_NOTE_PIXELS = 2
 # 素材主色统计时视为不透明的 alpha 下限
 _ALPHA_THRESHOLD = 100
-# 提取 flick_bg 红色核心时的红色通道下限
-_RED_THRESHOLD = 60
+# 提取 Lanota_Drag 蓝色核心的阈值（b 下限 / 最小绿色分量）
+_BLUE_THRESHOLD = 150
+_BLUE_MIN_G = 80
 # Tap/Drag 素材渲染的固定高度（像素，游戏里高度不随宽度变化）
 _NOTE_FIXED_HEIGHT = round(8 * 4 / 3)  # 8px 放大 1/3
 # Dynamix Drag：中央装饰 dy_mid 不拉伸保持比例，细轨高度 = dy_mid 高度的 11/69
 _DYNAMIX_RAIL_RATIO = 11 / 69
 # Slide（Hold）透明度（0-255，128 = 50%）
 _HOLD_ALPHA = round(255 * 0.5)
+_ALPHA_MAX = 255
+# 透视矩阵求解时的奇异阈值
+_MATRIX_EPSILON = 1e-12
+# 纹理段长度阈值（像素）：小于该值视为退化段跳过
+_ZERO_LENGTH = 0.5
 
 _DEFAULT_BPM = 120.0
 # 结尾超出分钟分界的容差（秒），超出视为需要新一栏
@@ -1178,6 +1185,14 @@ _SPRITE_CAPS: dict[str, tuple[int, int]] = {
 }
 
 
+def _crop_alpha(image: Image.Image) -> Image.Image:
+    """裁剪到 alpha 包围盒，去掉透明边距（使所有 note 拉伸后可见高度一致）。"""
+    bbox = image.getchannel("A").getbbox()
+    if bbox is None:
+        return image
+    return image.crop(bbox)
+
+
 def _resize_note_stretched(
     image: Image.Image,
     target_w: int,
@@ -1216,13 +1231,13 @@ _note_image_cache: dict[tuple[str, str], Image.Image | None] = {}
 def _note_image(kind: str, skin: str = DEFAULT_SKIN) -> Image.Image | None:
     """加载指定皮肤的素材，皮肤/类型缺失时回退 White 对应素材。
 
-    Phigros 的 Tap 无独立贴图（游戏里由 flick_bg 红色部分染色生成）。
+    Lanota 的 Tap 无独立贴图，由 Lanota_Drag 的蓝色部分染白生成。
     """
     key = (skin, kind)
     if key not in _note_image_cache:
         image = None
-        if skin == "Phigros" and kind == "Tap":
-            image = _phigros_tap_texture()
+        if skin == "Lanota" and kind == "Tap":
+            image = _lanota_tap_texture()
         if image is None:
             files = SKIN_SETS.get(skin, {})
             for filename in (files.get(kind), SKIN_SETS[DEFAULT_SKIN].get(kind)):
@@ -1240,9 +1255,9 @@ def _note_image(kind: str, skin: str = DEFAULT_SKIN) -> Image.Image | None:
 
 
 @lru_cache(maxsize=1)
-def _phigros_tap_texture() -> Image.Image | None:
-    """生成 Phigros Tap 素材：flick_bg 的红色核心染成 Tap 蓝（白色光晕保留）。"""
-    path = NOTE_DIR / "flick_bg.png"
+def _lanota_tap_texture() -> Image.Image | None:
+    """生成 Lanota Tap 素材：Lanota_Drag 的蓝色核心染成白色（金色边框保留）。"""
+    path = NOTE_DIR / "Lanota_Drag.png"
     if not path.exists():
         return None
     try:
@@ -1250,10 +1265,9 @@ def _phigros_tap_texture() -> Image.Image | None:
     except OSError:
         return None
     pixels = list(base.getdata())
-    blue = NOTE_COLORS["Tap"]
     recolored = [
-        (*blue, alpha)
-        if (r > _RED_THRESHOLD and r > g and r > b)
+        (255, 255, 255, alpha)
+        if (b > _BLUE_THRESHOLD and b > r and g > _BLUE_MIN_G)
         else (r, g, b, alpha)
         for r, g, b, alpha in pixels
     ]
@@ -1300,6 +1314,30 @@ def _hold_color(skin: str = DEFAULT_SKIN) -> tuple[int, int, int]:
     return _hold_color_cache[skin] or NOTE_COLORS["Hold"]
 
 
+# 已拉伸的 note 素材缓存：同一 (皮肤, 类型, 目标宽) 只拉伸一次
+# （大纹理如 Lanota 1780x304 每音符都做裁剪+缩放会非常慢）
+_note_resized_cache: dict[tuple[str, str, int], Image.Image] = {}
+
+
+def _resized_note_texture(
+    kind: str, skin: str, target_w: int, target_h: int
+) -> Image.Image | None:
+    """裁透明边并 9-slice 拉伸到目标宽，按 (皮肤, 类型, 目标宽) 缓存。"""
+    key = (kind, skin, target_w)
+    resized = _note_resized_cache.get(key)
+    if resized is None:
+        base = _note_image(kind, skin)
+        if base is None:
+            return None
+        if kind == "Drag" and skin == "Tech":
+            tinted = _tinted_note_image(kind, NOTE_COLORS["Drag"], skin)
+            if tinted is not None:
+                base = tinted
+        resized = _resize_note_stretched(_crop_alpha(base), target_w, target_h)
+        _note_resized_cache[key] = resized
+    return resized
+
+
 def _draw_note_image(
     image: Image.Image,
     kind: str,
@@ -1311,13 +1349,6 @@ def _draw_note_image(
 
     Tech 皮肤的 Drag（wipe）染黄色，其余皮肤保持素材本色。
     """
-    note_image = _note_image(kind, skin)
-    if note_image is None:
-        return False
-    if kind == "Drag" and skin == "Tech":
-        tinted = _tinted_note_image(kind, NOTE_COLORS["Drag"], skin)
-        if tinted is not None:
-            note_image = tinted
     t, x1, width = point
     col = _note_col(t, columns)
     px = round(_note_x(x1, col))
@@ -1326,9 +1357,24 @@ def _draw_note_image(
     if target_w <= _MIN_NOTE_PIXELS:
         return False
     # 高度固定（游戏里音符高度不随宽度变化），宽度 9-slice 拉伸（中间 1 像素列）
-    resized = _resize_note_stretched(note_image, target_w, _NOTE_FIXED_HEIGHT)
+    resized = _resized_note_texture(kind, skin, target_w, _NOTE_FIXED_HEIGHT)
+    if resized is None:
+        return False
     image.paste(resized, (px - resized.width // 2, py - resized.height // 2), resized)
     return True
+
+
+# Dynamix Drag 素材缓存：dy_mid 固定尺寸只算一次，细轨按目标宽缓存
+_dy_rail_cache: dict[int, Image.Image] = {}
+
+
+@lru_cache(maxsize=1)
+def _dy_mid_scaled() -> Image.Image:
+    """dy_mid 裁剪透明边后缩放到 note 高度（保持比例）。"""
+    mid = _note_image("dy_mid", "Dynamix")
+    mid_cropped = _crop_alpha(mid)
+    mid_w = max(1, round(mid_cropped.width * _NOTE_FIXED_HEIGHT / mid_cropped.height))
+    return mid_cropped.resize((mid_w, _NOTE_FIXED_HEIGHT), Image.Resampling.LANCZOS)
 
 
 def _draw_dynamix_drag(
@@ -1336,7 +1382,7 @@ def _draw_dynamix_drag(
     point: tuple[float, float, float],
     columns: int,
 ) -> bool:
-    """Dynamix Drag：中央 dy_mid（原尺寸、不拉伸、保持比例）+ 细轨 Dynamix_Drag。
+    """Dynamix Drag：中央 dy_mid（缩放至 note 高度、保持比例）+ 细轨 Dynamix_Drag。
 
     细轨 9-slice 拉伸到音符宽度，高度 = dy_mid 高度的 11/69，两者纵坐标居中。
     """
@@ -1351,14 +1397,39 @@ def _draw_dynamix_drag(
     target_w = round(_note_pixel_width(width))
     if target_w <= _MIN_NOTE_PIXELS:
         return False
-    _, mid_h = mid.size
-    rail_h = round(mid_h * _DYNAMIX_RAIL_RATIO)
-    rail_img = _resize_note_stretched(rail, target_w, rail_h)
+    # dy_mid 与普通 note 同高（不参与拉伸、保持比例）；固定尺寸只算一次
+    mid_scaled = _dy_mid_scaled()
+    # 细轨高度 = dy_mid 高度的 11/69；按目标宽缓存
+    rail_h = max(1, round(_NOTE_FIXED_HEIGHT * _DYNAMIX_RAIL_RATIO))
+    rail_img = _dy_rail_cache.get(target_w)
+    if rail_img is None:
+        rail_img = _resize_note_stretched(_crop_alpha(rail), target_w, rail_h)
+        _dy_rail_cache[target_w] = rail_img
     image.paste(
         rail_img, (px - rail_img.width // 2, py - rail_img.height // 2), rail_img
     )
-    image.paste(mid, (px - mid.width // 2, py - mid.height // 2), mid)
+    image.paste(
+        mid_scaled,
+        (px - mid_scaled.width // 2, py - mid_scaled.height // 2),
+        mid_scaled,
+    )
     return True
+
+
+# Phigros Flick 素材缓存：flick_bg 条按目标宽缓存，箭头固定尺寸只算一次
+_flick_bar_cache: dict[int, Image.Image] = {}
+
+
+@lru_cache(maxsize=1)
+def _flick_arrow_scaled() -> Image.Image:
+    """flick 箭头裁透明边后缩放到 note 高度（保持比例）。"""
+    arrow = _note_image("FlickArrow", "Phigros")
+    arrow_cropped = _crop_alpha(arrow)
+    arrow_h = _NOTE_FIXED_HEIGHT
+    arrow_w = max(1, round(arrow_cropped.width * arrow_h / arrow_cropped.height))
+    return arrow_cropped.resize(
+        (arrow_w, arrow_h), Image.Resampling.LANCZOS
+    )
 
 
 def _draw_flick_note(
@@ -1378,22 +1449,24 @@ def _draw_flick_note(
         return False
     if skin == "Phigros":
         bg = _note_image("FlickBg", skin)
-        arrow = _note_image("FlickArrow", skin)
-        if bg is None or arrow is None:
+        if bg is None or _note_image("FlickArrow", skin) is None:
             return False
         caps = _SPRITE_CAPS.get("flick_bg.png")
-        bar = _resize_note_stretched(
-            bg, target_w, _NOTE_FIXED_HEIGHT, caps[0], caps[1]
-        )
+        bar = _flick_bar_cache.get(target_w)
+        if bar is None:
+            bar = _resize_note_stretched(
+                _crop_alpha(bg), target_w, _NOTE_FIXED_HEIGHT, caps[0], caps[1]
+            )
+            _flick_bar_cache[target_w] = bar
         image.paste(
             bar, (px - bar.width // 2, py - bar.height // 2), bar
         )
-        # 箭头保持比例缩放到普通 note 高度（不参与横向拉伸），居中
-        arrow_h = _NOTE_FIXED_HEIGHT
-        arrow_w = max(1, round(arrow.width * arrow_h / arrow.height))
-        arrow_scaled = arrow.resize((arrow_w, arrow_h), Image.Resampling.LANCZOS)
+        # 箭头裁透明边后保持比例缩放到普通 note 高度（不参与横向拉伸），居中
+        arrow_scaled = _flick_arrow_scaled()
         image.paste(
-            arrow_scaled, (px - arrow_w // 2, py - arrow_h // 2), arrow_scaled
+            arrow_scaled,
+            (px - arrow_scaled.width // 2, py - arrow_scaled.height // 2),
+            arrow_scaled,
         )
         return True
     if skin == "Lanota":
@@ -1431,7 +1504,76 @@ def _draw_note_bar(
     )
 
 
-def _draw_hold_on_layer(
+def _perspective_matrix(
+    src_pts: list[tuple[float, float]], dst_pts: list[tuple[float, float]]
+) -> tuple[float, float, float, float, float, float, float, float]:
+    """解 8 元线性方程组，求把 dst 四点映射到 src 四点的透视系数。
+
+    PIL PERSPECTIVE 系数为输出像素 → 输入像素：
+        u = (a x + b y + c) / (g x + h y + 1)
+        v = (d x + e y + f) / (g x + h y + 1)
+    """
+    matrix: list[list[float]] = []
+    for (x, y), (u, v) in zip(dst_pts, src_pts):
+        matrix.append([x, y, 1, 0, 0, 0, -u * x, -u * y, u])
+        matrix.append([0, 0, 0, x, y, 1, -v * x, -v * y, v])
+    for col in range(8):
+        pivot = max(range(col, 8), key=lambda r: abs(matrix[r][col]))
+        matrix[col], matrix[pivot] = matrix[pivot], matrix[col]
+        pivot_val = matrix[col][col]
+        if abs(pivot_val) < _MATRIX_EPSILON:
+            raise ValueError("degenerate quad")  # noqa: TRY003
+        for row in range(8):
+            if row == col:
+                continue
+            factor = matrix[row][col] / pivot_val
+            for c in range(col, 9):
+                matrix[row][c] -= factor * matrix[col][c]
+    return tuple(matrix[i][8] / matrix[i][i] for i in range(8))
+
+
+def _draw_hold_segment(  # noqa: PLR0913, PLR0917
+    layer: Image.Image,
+    slice_img: Image.Image,
+    p1: tuple[float, float, float],
+    p2: tuple[float, float, float],
+    left: int,
+    top: int,
+) -> None:
+    """把 Hold 素材切片透视映射到 p1→p2 段四边形并叠加到 layer（50% alpha）。"""
+    x1, y1, h1 = p1
+    x2, y2, h2 = p2
+    sw, sh = slice_img.size
+    quad = [
+        (x1 - h1 - left, y1 - top),
+        (x1 + h1 - left, y1 - top),
+        (x2 + h2 - left, y2 - top),
+        (x2 - h2 - left, y2 - top),
+    ]
+    qx = [p[0] for p in quad]
+    qy = [p[1] for p in quad]
+    bx0, by0 = min(qx), min(qy)
+    bx1, by1 = max(qx), max(qy)
+    bw, bh = round(bx1 - bx0) + 1, round(by1 - by0) + 1
+    if bw < 1 or bh < 1:
+        return
+    dst = [(qx[i] - bx0, qy[i] - by0) for i in range(4)]
+    src = [(0, 0), (sw, 0), (sw, sh), (0, sh)]
+    try:
+        coeffs = _perspective_matrix(src, dst)
+    except ValueError:
+        return
+    warped = slice_img.transform(
+        (bw, bh), Image.Transform.PERSPECTIVE, coeffs, Image.Resampling.BILINEAR
+    )
+    if _HOLD_ALPHA < _ALPHA_MAX:
+        a_ch = warped.getchannel("A").point(lambda v: v * _HOLD_ALPHA // _ALPHA_MAX)
+        warped.putalpha(a_ch)
+    # alpha_composite：半透明源做正规 src-over 叠加（paste 会按 mask 混合 RGB）
+    layer.alpha_composite(warped, (round(bx0), round(by0)))
+
+
+def _draw_hold_on_layer(  # noqa: C901, PLR0912, PLR0915
     overlay: Image.Image,
     note: Note,
     columns: int,
@@ -1440,8 +1582,12 @@ def _draw_hold_on_layer(
     """把一个 Slide（Hold）画到叠加层，alpha 逐层累加。
 
     跨分栏处插入边界点，每列的多边形都延伸到栏边界（避免截断）。
-    每个 Hold 画到自身包围盒大小的图层上再合成，避免整图开销。
+    有 Hold 素材时按路径分段做透视纹理映射（素材纵向切片对应各段长度），
+    素材缺失回退纯色多边形。每个 Hold 画到自身包围盒大小的图层上再合成。
     """
+    texture = _note_image("Hold", skin)
+    if texture is not None:
+        texture = _crop_alpha(texture)
     color = _hold_color(skin)
     half_scale = (_COLUMN_WIDTH - 2 * _LANE_PAD) / 2
     # 1) 跨栏边界处插入 (t, x, 宽, 列) 点：边界点同时加入两列，
@@ -1463,21 +1609,21 @@ def _draw_hold_on_layer(
         expanded.append(
             (raw[-1][0], raw[-1][1], raw[-1][2], _note_col(raw[-1][0], columns))
         )
-    # 2) 按列分组转像素坐标
-    groups: dict[int, list[tuple[float, float, float]]] = {}
+    # 2) 转像素坐标（带列号）
+    pts: list[tuple[float, float, float, int]] = []
     for t, x, width, col in expanded:
         px = _note_x(x, col)
         half = width * half_scale
-        groups.setdefault(col, []).append((px, _note_y(t, col), half))
-    if not groups:
+        pts.append((px, _note_y(t, col), half, col))
+    if not pts:
         return
     # 3) 包围盒（±1px 抗锯齿余量）
-    xs = [px - half for pts in groups.values() for px, py, half in pts]
-    xs += [px + half for pts in groups.values() for px, py, half in pts]
-    ys = [py for pts in groups.values() for px, py, half in pts]
+    xs = [px - half for px, py, half, _ in pts]
+    xs += [px + half for px, py, half, _ in pts]
+    ys = [py for px, py, half, _ in pts]
     if len(note.points) == 1:
         thickness = _NOTE_THICKNESS / 2
-        _, py, _ = next(iter(groups.values()))[0]
+        _, py, _, _ = pts[0]
         ys.extend((py - thickness, py + thickness))
     left, top = max(0, int(min(xs)) - 1), max(0, int(min(ys)) - 1)
     right, bottom = (
@@ -1489,28 +1635,56 @@ def _draw_hold_on_layer(
     layer = Image.new(
         "RGBA", (right - left + 1, bottom - top + 1), (0, 0, 0, 0)
     )
-    ldraw = ImageDraw.Draw(layer)
-    for pts in groups.values():
-        if len(pts) == 1:
-            # 单点组：横向小条（避免出现圆球）
-            px, py, half = pts[0]
-            thickness = _NOTE_THICKNESS / 2
-            ldraw.rounded_rectangle(
-                (
-                    px - half - left,
-                    py - thickness - top,
-                    px + half - left,
-                    py + thickness - top,
-                ),
-                radius=3,
-                fill=(*color, _HOLD_ALPHA),
-            )
-            continue
-        lefts = [(px - half - left, py - top) for px, py, half in pts]
-        rights = [
-            (px + half - left, py - top) for px, py, half in reversed(pts)
-        ]
-        ldraw.polygon(lefts + rights, fill=(*color, _HOLD_ALPHA))
+    # 4) 按段绘制：同列相邻两点组成一个纹理四边形
+    if texture is not None and len(pts) > 1:
+        segments: list[
+            tuple[tuple[float, float, float], tuple[float, float, float], float]
+        ] = []
+        total = 0.0
+        for (x1, y1, h1, c1), (x2, y2, h2, c2) in zip(pts, pts[1:]):
+            if c1 != c2:
+                continue
+            length = math.hypot(x2 - x1, y2 - y1)
+            if length < _ZERO_LENGTH:
+                continue
+            segments.append(((x1, y1, h1), (x2, y2, h2), length))
+            total += length
+        if segments and total > _ZERO_LENGTH:
+            tw, th = texture.size
+            cum = 0.0
+            for p1, p2, length in segments:
+                y0 = int(th * cum / total)
+                cum += length
+                y1t = max(y0 + 1, int(th * cum / total))
+                slice_img = texture.crop((0, y0, tw, min(th, y1t)))
+                _draw_hold_segment(layer, slice_img, p1, p2, left, top)
+    else:
+        ldraw = ImageDraw.Draw(layer)
+        groups: dict[int, list[tuple[float, float, float]]] = {}
+        for px, py, half, col in pts:
+            groups.setdefault(col, []).append((px, py, half))
+        for group_pts in groups.values():
+            if len(group_pts) == 1:
+                # 单点组：横向小条（避免出现圆球）
+                px, py, half = group_pts[0]
+                thickness = _NOTE_THICKNESS / 2
+                ldraw.rounded_rectangle(
+                    (
+                        px - half - left,
+                        py - thickness - top,
+                        px + half - left,
+                        py + thickness - top,
+                    ),
+                    radius=3,
+                    fill=(*color, _HOLD_ALPHA),
+                )
+                continue
+            lefts = [(px - half - left, py - top) for px, py, half in group_pts]
+            rights = [
+                (px + half - left, py - top)
+                for px, py, half in reversed(group_pts)
+            ]
+            ldraw.polygon(lefts + rights, fill=(*color, _HOLD_ALPHA))
     region = overlay.crop((left, top, right + 1, bottom + 1))
     overlay.paste(Image.alpha_composite(region, layer), (left, top))
 
