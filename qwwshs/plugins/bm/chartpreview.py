@@ -56,6 +56,8 @@ SKIN_SETS: dict[str, dict[str, str]] = {
         "Tap": "Dynamix_Tap.png",
         "Drag": "Dynamix_Drag.png",
         "Hold": "Dynamix_Hold.png",
+        # Drag 中央装饰（不拉伸，保持比例）
+        "dy_mid": "dy_mid.png",
     },
     "Dr3": {
         "Tap": "Dr3_Tap.png",
@@ -138,6 +140,8 @@ _MIN_NOTE_PIXELS = 2
 _ALPHA_THRESHOLD = 100
 # Tap/Drag 素材渲染的固定高度（像素，游戏里高度不随宽度变化）
 _NOTE_FIXED_HEIGHT = round(8 * 4 / 3)  # 8px 放大 1/3
+# Dynamix Drag：中央装饰 dy_mid 不拉伸保持比例，细轨高度 = dy_mid 高度的 11/69
+_DYNAMIX_RAIL_RATIO = 11 / 69
 # Slide（Hold）透明度（0-255，128 = 50%）
 _HOLD_ALPHA = round(255 * 0.5)
 
@@ -1136,13 +1140,40 @@ def _draw_tap_drag(
         if note.kind == "Hold":
             continue
         for point in note.points:
-            if not _draw_note_image(image, note.kind, point, columns, skin):
+            if skin == "Dynamix" and note.kind == "Drag":
+                drawn = _draw_dynamix_drag(image, point, columns)
+            else:
+                drawn = _draw_note_image(image, note.kind, point, columns, skin)
+            if not drawn:
                 _draw_note_bar(draw, point, NOTE_COLORS[note.kind], columns)
 
 
 def _note_pixel_width(width: float) -> float:
     """音符宽度值（x2）→ 像素宽（x2=1 占满整个轨道）。"""
     return max(1.0, width * (_COLUMN_WIDTH - 2 * _LANE_PAD))
+
+
+def _resize_note_stretched(
+    image: Image.Image, target_w: int, target_h: int
+) -> Image.Image:
+    """9-slice 拉伸：左右两端保留原样，只有中间 1 像素列拉伸到目标宽。
+
+    宽度不变小（或未变宽）时退化为整体缩放；高度始终整体缩放到目标高。
+    """
+    src_w, src_h = image.size
+    if target_w <= src_w:
+        return image.resize((target_w, target_h), Image.Resampling.LANCZOS)
+    mid = src_w // 2
+    left = image.crop((0, 0, mid, src_h))
+    middle = image.crop((mid, 0, mid + 1, src_h))
+    right = image.crop((mid + 1, 0, src_w, src_h))
+    stretch = target_w - src_w + 1
+    middle = middle.resize((max(1, stretch), src_h), Image.Resampling.NEAREST)
+    out = Image.new("RGBA", (target_w, src_h))
+    out.paste(left, (0, 0))
+    out.paste(middle, (mid, 0))
+    out.paste(right, (mid + stretch, 0))
+    return out.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
 
 _note_image_cache: dict[tuple[str, str], Image.Image | None] = {}
@@ -1231,11 +1262,39 @@ def _draw_note_image(
     target_w = round(_note_pixel_width(width))
     if target_w <= _MIN_NOTE_PIXELS:
         return False
-    # 高度固定（游戏里音符高度不随宽度变化）
-    resized = note_image.resize(
-        (target_w, _NOTE_FIXED_HEIGHT), Image.Resampling.LANCZOS
-    )
+    # 高度固定（游戏里音符高度不随宽度变化），宽度 9-slice 拉伸（中间 1 像素列）
+    resized = _resize_note_stretched(note_image, target_w, _NOTE_FIXED_HEIGHT)
     image.paste(resized, (px - resized.width // 2, py - resized.height // 2), resized)
+    return True
+
+
+def _draw_dynamix_drag(
+    image: Image.Image,
+    point: tuple[float, float, float],
+    columns: int,
+) -> bool:
+    """Dynamix Drag：中央 dy_mid（原尺寸、不拉伸、保持比例）+ 细轨 Dynamix_Drag。
+
+    细轨 9-slice 拉伸到音符宽度，高度 = dy_mid 高度的 11/69，两者纵坐标居中。
+    """
+    rail = _note_image("Drag", "Dynamix")
+    mid = _note_image("dy_mid", "Dynamix")
+    if rail is None or mid is None:
+        return False
+    t, x1, width = point
+    col = _note_col(t, columns)
+    px = round(_note_x(x1, col))
+    py = round(_note_y(t, col))
+    target_w = round(_note_pixel_width(width))
+    if target_w <= _MIN_NOTE_PIXELS:
+        return False
+    _, mid_h = mid.size
+    rail_h = round(mid_h * _DYNAMIX_RAIL_RATIO)
+    rail_img = _resize_note_stretched(rail, target_w, rail_h)
+    image.paste(
+        rail_img, (px - rail_img.width // 2, py - rail_img.height // 2), rail_img
+    )
+    image.paste(mid, (px - mid.width // 2, py - mid.height // 2), mid)
     return True
 
 
