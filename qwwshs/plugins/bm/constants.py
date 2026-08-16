@@ -285,11 +285,47 @@ def load_constants() -> dict[str, dict]:
 
 _cache: dict[str, dict[str, dict]] = {}
 
+# 自动同步的补充定数表（scripts/sync-constants.py 生成，位于 gitignore 的 data/ 下）
+_EXTRA_PATH = DATA_DIR / "constants_extra.json"
+
+
+def _merge_extra_constants(songs: dict[str, dict]) -> int:
+    """合并自动同步的新曲目（constants_extra.json），返回新增条数。
+
+    条目优先保留已合并结果：同名曲目以补充文件为准（补充文件是扫描
+    谱面得到的最新数据），已存在字段不被覆盖。
+    """
+    try:
+        extra = json.loads(_EXTRA_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    if not isinstance(extra, dict):
+        return 0
+    added = 0
+    for title, entry in extra.items():
+        if not isinstance(entry, dict):
+            continue
+        if title not in songs:
+            added += 1
+        merged = dict(songs.get(title, {}))
+        # 只覆盖非空字段：补充条目里缺失的难度保持主表原值
+        merged.update(
+            {k: v for k, v in entry.items() if v not in (None, [], "", {})}
+        )
+        songs[title] = merged
+    return added
+
 
 def get_song_constants() -> dict[str, dict]:
-    """获取定数表（模块级缓存），并写入 JSON 缓存供排查。"""
+    """获取定数表（模块级缓存），并写入 JSON 缓存供排查。
+
+    自动同步的补充曲目（constants_extra.json）在加载时合并。
+    """
     if "songs" not in _cache:
         songs = load_constants()
+        added = _merge_extra_constants(songs)
+        if added:
+            logger.info("已合并 %d 首自动同步的新曲目到定数表", added)
         _cache["songs"] = songs
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
