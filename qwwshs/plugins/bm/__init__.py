@@ -122,7 +122,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.7.19"
+BM_VERSION = "0.7.20"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -577,21 +577,16 @@ async def handle_bind(event: MessageEvent) -> None:
 
 @bm_export_revoke.handle()
 async def handle_export_revoke(bot: Bot, event: MessageEvent) -> None:
-    """导出文件后 60 秒内回复 1：立即撤回文件消息。"""
+    """导出文件后 60 秒内回复 1：立即撤回（删除群文件）。"""
     qq = str(event.user_id)
     if qq not in _pending_export_revoke:
         return
     if event.message.extract_plain_text().strip() != "1":
         return
-    mid = _pending_export_revoke.pop(qq)
-    if mid is None:
-        await bm_export_revoke.send("⚠️ 无法定位导出文件消息，请手动删除")
-        return
-    try:
-        await bot.delete_msg(message_id=mid)
+    if await _revoke_export_file(bot, qq):
         await bm_export_revoke.send("✅ 已撤回导出文件")
-    except Exception as exc:  # noqa: BLE001
-        await bm_export_revoke.send(f"⚠️ 撤回失败：{exc}")
+    else:
+        await bm_export_revoke.send("⚠️ 撤回失败，请手动删除群文件")
 
 
 @bm_version.handle()
@@ -604,8 +599,11 @@ async def handle_version() -> None:
 _CONTAINER_EXPORT_DIR = "/app/data/exports"
 # 导出文件消息的自动撤回时间（秒）；期间用户回复 1 立即撤回
 _EXPORT_REVOKE_SECONDS = 60
-# QQ -> 待撤回的导出文件消息 id（回退上传方式拿不到 id 时为 None）
-_pending_export_revoke: dict[str, int | None] = {}
+# 群文件 busid（upload_group_file 上传的群文件固定为 102）
+_GROUP_FILE_BUSID = 102
+# QQ -> (群号, 群文件 file_id)。QQ 协议下 bot 发的文件消息无法撤回，
+# 只能删除群文件存储（实测有效）；私聊无删除 API，不登记
+_pending_export_revoke: dict[str, tuple[int, str]] = {}
 # 自动撤回任务引用（防 GC，完成后自动移除）
 _revoke_tasks: set[asyncio.Task] = set()
 
@@ -646,30 +644,47 @@ async def _remove_export_from_container(qq: str) -> None:
     await proc.communicate()
 
 
+async def _revoke_export_file(bot: Bot, qq: str) -> bool:
+    """撤回导出的文件：删除群文件存储（QQ 协议下文件消息本身不可撤回）。
+
+    返回是否成功；未登记（已撤回/私聊）时视为成功。
+    """
+    pending = _pending_export_revoke.pop(qq, None)
+    if pending is None:
+        return True
+    group_id, file_id = pending
+    try:
+        await bot.call_api(
+            "delete_group_file",
+            group_id=group_id,
+            file_id=file_id,
+            busid=_GROUP_FILE_BUSID,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"删除导出群文件失败 (file_id={file_id}): {exc}")
+        return False
+    logger.info(f"已删除导出群文件 {file_id}")
+    return True
+
+
 async def _auto_revoke_export(bot: Bot, qq: str) -> None:
-    """导出 _EXPORT_REVOKE_SECONDS 秒后自动撤回文件消息（已撤回则跳过）。"""
+    """导出 _EXPORT_REVOKE_SECONDS 秒后自动删除文件（已撤回则跳过）。"""
     await asyncio.sleep(_EXPORT_REVOKE_SECONDS)
     if qq not in _pending_export_revoke:
         return
-    mid = _pending_export_revoke.pop(qq)
-    if mid is None:
-        return
-    try:
-        await bot.delete_msg(message_id=mid)
-        logger.info(f"已自动撤回导出文件消息 {mid}")
-    except Exception as exc:  # noqa: BLE001
-        logger.error(f"自动撤回导出消息失败 (mid={mid}): {exc}")
+    await _revoke_export_file(bot, qq)
 
 
 @bm_export.handle()
-async def handle_export(  # noqa: C901, PLR0912, PLR0915
+async def handle_export(
     bot: Bot, event: MessageEvent
 ) -> None:
     """导出自己的存档（游戏可直接导入的 FormalSave.txt）。
 
     绑定时保存过原始文件则原样返回；旧绑定未保存原始文件的，
     用新生成的 RSA 密钥把账号 JSON 重新加密为游戏格式导出。
-    文件消息在 _EXPORT_REVOKE_SECONDS 秒后自动撤回，期间回复 1 立即撤回。
+    群聊导出后 _EXPORT_REVOKE_SECONDS 秒内自动删除群文件，期间回复 1
+    立即删除；私聊无删除 API，不自动撤回。
     """
     qq = str(event.user_id)
     binding = _bindings.get(qq)
@@ -696,48 +711,32 @@ async def handle_export(  # noqa: C901, PLR0912, PLR0915
     except Exception as exc:  # noqa: BLE001
         logger.error(f"写入 QQ 容器失败: {exc}")
         await bm_export.finish(f"❌ 写入 QQ 客户端容器失败：{exc}")
-    # 优先用普通文件消息发送（返回 message_id，可撤回）；失败回退 upload API
-    mid: int | None = None
+    # 上传到群文件/私聊文件；群文件返回 file_id 用于撤回删除
+    file_id: str | None = None
     try:
-        file_seg = MessageSegment(
-            "file", {"file": container_path, "name": "FormalSave.txt"}
-        )
         if isinstance(event, GroupMessageEvent):
-            result = await bot.send_group_msg(
-                group_id=event.group_id, message=file_seg
+            result = await bot.call_api(
+                "upload_group_file",
+                group_id=event.group_id,
+                file=container_path,
+                name="FormalSave.txt",
             )
-        else:
-            result = await bot.send_private_msg(
-                user_id=event.user_id, message=file_seg
-            )
-        mid = result if isinstance(result, int) else result.get("message_id")
-    except Exception as exc:  # noqa: BLE001
-        logger.error(f"文件消息发送失败，回退 upload API: {exc}")
-    if mid is None:
-        try:
-            if isinstance(event, GroupMessageEvent):
-                result = await bot.call_api(
-                    "upload_group_file",
-                    group_id=event.group_id,
-                    file=container_path,
-                    name="FormalSave.txt",
-                )
-            else:
-                result = await bot.call_api(
-                    "upload_private_file",
-                    user_id=event.user_id,
-                    file=container_path,
-                    name="FormalSave.txt",
-                )
             if isinstance(result, dict):
-                mid = result.get("message_id")
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"导出上传失败: {exc}")
-            await _remove_export_from_container(qq)
-            await bm_export.finish(f"❌ 上传存档文件失败：{exc}")
+                file_id = result.get("file_id")
+        else:
+            await bot.call_api(
+                "upload_private_file",
+                user_id=event.user_id,
+                file=container_path,
+                name="FormalSave.txt",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"导出上传失败: {exc}")
+        await _remove_export_from_container(qq)
+        await bm_export.finish(f"❌ 上传存档文件失败：{exc}")
     await _remove_export_from_container(qq)
-    if mid is not None:
-        _pending_export_revoke[qq] = mid
+    if file_id:
+        _pending_export_revoke[qq] = (event.group_id, file_id)
         task = asyncio.create_task(_auto_revoke_export(bot, qq))
         _revoke_tasks.add(task)
         task.add_done_callback(_revoke_tasks.discard)
@@ -745,7 +744,7 @@ async def handle_export(  # noqa: C901, PLR0912, PLR0915
             f"文件将在 {_EXPORT_REVOKE_SECONDS} 秒后自动撤回，期间回复 1 可立即撤回"
         )
     else:
-        revoke_note = "⚠️ 本次上传无法自动撤回，请及时保存并手动删除文件消息"
+        revoke_note = "⚠️ 私聊导出无法自动撤回，请及时保存并手动删除文件"
     await bm_export.finish(
         f"✅ 已导出存档（FormalSave.txt）{note}\n{revoke_note}\n"
         "保存到游戏存档目录后重进游戏即可导入：\n"
