@@ -100,6 +100,8 @@ class BmConfig(BaseModel):
     bm_admin_qqs: set[int] = set()
     # 超管 QQ：唯一可管理白名单的人（未配置则无人可管理）
     bm_super_admin_qq: int | None = None
+    # QQ 客户端容器名（NapCat/snowluma 跑在 Docker 里，导出文件需写入容器内路径）
+    bm_qq_container: str = "snowluma"
 
 
 bm_config = get_plugin_config(BmConfig)
@@ -577,7 +579,45 @@ async def handle_version() -> None:
     await bm_version.finish(f"🤖 Berry Melody 查分 Bot v{BM_VERSION}")
 
 
-_EXPORT_DIR = _DATA_DIR / "exports"
+# QQ 客户端（NapCat/snowluma）跑在 Docker 容器里：导出文件需写入容器内
+# 数据卷（/app/data），上传 API 传容器内路径；主机路径容器看不到
+_CONTAINER_EXPORT_DIR = "/app/data/exports"
+
+
+async def _copy_export_to_container(qq: str, content: bytes) -> str:
+    """把导出文件写入 QQ 客户端容器数据卷，返回容器内路径。"""
+    container_path = f"{_CONTAINER_EXPORT_DIR}/{qq}.txt"
+    proc = await asyncio.create_subprocess_exec(
+        "docker",
+        "exec",
+        "-i",
+        bm_config.bm_qq_container,
+        "sh",
+        "-c",
+        f"mkdir -p {_CONTAINER_EXPORT_DIR} && cat > {container_path}",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _stdout, stderr = await proc.communicate(content)
+    if proc.returncode != 0:
+        detail = stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"写入 QQ 容器失败：{detail}")  # noqa: TRY003
+    return container_path
+
+
+async def _remove_export_from_container(qq: str) -> None:
+    proc = await asyncio.create_subprocess_exec(
+        "docker",
+        "exec",
+        bm_config.bm_qq_container,
+        "rm",
+        "-f",
+        f"{_CONTAINER_EXPORT_DIR}/{qq}.txt",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await proc.communicate()
 
 
 @bm_export.handle()
@@ -591,45 +631,47 @@ async def handle_export(bot: Bot, event: MessageEvent) -> None:
     binding = _bindings.get(qq)
     if binding is None:
         await bm_export.finish("❌ 尚未绑定存档，请先 /bmbind 绑定后再导出")
-    _EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    path = _EXPORT_DIR / f"{qq}.txt"
     note = ""
     raw_b64 = binding.get("raw_b64")
     if raw_b64:
         try:
-            raw = base64.b64decode(raw_b64)
+            content = base64.b64decode(raw_b64)
         except ValueError:
             await bm_export.finish("❌ 存档数据损坏，请重新 /bmbind")
-        path.write_bytes(raw)
     else:
         # 旧绑定：用新密钥重新加密（游戏用存档内嵌私钥解密，新密钥可直接导入）
         try:
             key = generate_save_key()
-            path.write_text(build_save_text(key, binding["data"]), encoding="utf-8")
+            content = build_save_text(key, binding["data"]).encode("utf-8")
         except Exception as exc:  # noqa: BLE001
             logger.error(f"导出重新加密失败: {exc}")
             await bm_export.finish(f"❌ 重新加密导出失败：{exc}")
         note = "（旧绑定存档，已用新密钥重新加密，可直接导入游戏）"
     try:
+        container_path = await _copy_export_to_container(qq, content)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"写入 QQ 容器失败: {exc}")
+        await bm_export.finish(f"❌ 写入 QQ 客户端容器失败：{exc}")
+    try:
         if isinstance(event, GroupMessageEvent):
             await bot.call_api(
                 "upload_group_file",
                 group_id=event.group_id,
-                file=str(path),
+                file=container_path,
                 name="FormalSave.txt",
             )
         else:
             await bot.call_api(
                 "upload_private_file",
                 user_id=event.user_id,
-                file=str(path),
+                file=container_path,
                 name="FormalSave.txt",
             )
     except Exception as exc:  # noqa: BLE001
         logger.error(f"导出上传失败: {exc}")
-        path.unlink(missing_ok=True)
+        await _remove_export_from_container(qq)
         await bm_export.finish(f"❌ 上传存档文件失败：{exc}")
-    path.unlink(missing_ok=True)
+    await _remove_export_from_container(qq)
     await bm_export.finish(
         f"✅ 已导出存档（FormalSave.txt）{note}\n"
         "保存到游戏存档目录后重进游戏即可导入：\n"
