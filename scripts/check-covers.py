@@ -1,57 +1,52 @@
 #!/usr/bin/env python3
-"""检查曲绘覆盖：对照 chart/Info 的曲目清单，找出 images/ 里缺失的曲绘。
+"""检查曲绘覆盖：对照全量定数表，找出 images/ 里缺失的曲绘。
 
 用法（仓库根目录）：
     python scripts/check-covers.py
 
-游戏更新后运行，确认新曲都有封面。曲绘文件按「内部名」或「显示名」命名
-均可匹配（如 ``Infinity.png`` 对应 Info 显示名 ``IF = Infinity``）；
-输出缺失曲绘的曲目清单。
+游戏更新后运行，确认每首曲目都有封面。匹配逻辑与运行时一致
+（song.find_cover：曲名/原曲名/别名 + 难度变体 + 空白折叠），
+检查范围是全量定数表（xlsx 主表 + constants_extra 合并条目），
+比只对照 chart/Info 的旧版检查更全——曾有 4 首缺失因 Info 未收录而漏检。
 """
 
 # ruff: noqa: T201
 
 from __future__ import annotations
 
-import re
+import importlib
 import sys
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CHART_DIR = ROOT / "qwwshs" / "plugins" / "bm" / "chart"
-IMAGE_DIR = ROOT / "qwwshs" / "plugins" / "bm" / "images"
+BM_DIR = ROOT / "qwwshs" / "plugins" / "bm"
 
 
-def norm(s: str) -> str:
-    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", s.lower())
+def _load_modules() -> tuple:
+    """以假包名独立加载 constants/song（包 __init__ 会触发 NoneBot 初始化）。"""
+    pkg = types.ModuleType("bm_standalone")
+    pkg.__path__ = [str(BM_DIR)]
+    sys.modules["bm_standalone"] = pkg
+    constants = importlib.import_module("bm_standalone.constants")
+    song = importlib.import_module("bm_standalone.song")
+    return constants, song
 
 
 def main() -> int:
-    info_path = CHART_DIR / "Info"
-    if not info_path.exists():
-        print(f"✗ 未找到 {info_path}")
-        return 1
-    text = info_path.read_text(encoding="utf-8-sig", errors="replace")
-    songs: list[tuple[str, str]] = []  # (内部名, 显示名)
-    for block in re.finditer(r"Song::\s*\{\s*(.*?)\s*\};", text, flags=re.DOTALL):
-        body = block.group(1)
-        key = re.search(r'\$\s*Path\s*=\s*"([^"]*)"', body)
-        title = re.search(r'\$\s*Title\s*=\s*"([^"]*)"', body)
-        if key:
-            songs.append((key.group(1), title.group(1) if title else key.group(1)))
-    covers = {
-        norm(f.stem) for f in IMAGE_DIR.iterdir() if f.suffix == ".png"
-    }
-    missing = [
-        (key, title)
-        for key, title in songs
-        if norm(key) not in covers and norm(title) not in covers
-    ]
-    print(f"Info 曲目: {len(songs)} 首 | images/ 曲绘: {len(covers)} 个")
+    constants, song = _load_modules()
+    consts = constants.get_song_constants()
+    print(f"定数表曲目: {len(consts)} 首")
+    missing = []
+    for name, entry in consts.items():
+        if song.find_cover(name, entry) is None:
+            missing.append((name, entry))
     if missing:
         print(f"✗ 缺失曲绘 {len(missing)} 首：")
-        for key, title in missing:
-            print(f"  - {title} (内部名 {key})")
+        for name, entry in missing:
+            aliases = ", ".join(str(a) for a in entry.get("aliases") or [])
+            print(f"  - {name!r}（别名: {aliases or '无'}）")
+        print("（个别曲目 APK 内无曲绘资源、需人工补充，见 UPDATE.md 5.1 记录）")
         return 1
     print("✓ 全部曲目都有曲绘")
     return 0

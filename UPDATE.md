@@ -105,16 +105,33 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
 ### 5.1 曲绘（歌曲封面）
 
 - 来源：`ass\Texture2D\<曲名>.png`（如 `3rd Avenue.png`），曲绘按曲名命名
-- 处理：按需裁切/缩放后存为 `images\<曲名>.png`
-- **完整性检查**（每次更新必做）：对照新 Info 的 52 首曲目清单，检查每首都有曲绘：
+- **注意：曲目曲绘的真身是 Addressables 里的 `SongPackage/<章节>/<曲名>/Header.png`**
+  （2048×1536），全量导出时所有歌的 Header/Capsule **同名互相覆盖**，最终只剩
+  UI 那几张——这是部分曲目缺曲绘的根因。缺失时用 `--containers` 逐曲提取：
 
   ```bash
-  # 输出缺失曲绘的曲目（对照 Info 曲目）
+  cd /d E:\nb\test\AssetStudio-net10.0-win
+  # 容器路径查 assets/aa/catalog.json（搜曲名）
+  AssetStudio.CLI.exe "E:\nb\test\Berry Melody\assets\aa\Android\defaultlocalgroup_assets_all_0d65a21c70a7587b3e13734f4f1e101a.bundle" "E:\nb\test\Berry Melody\ass_song\<曲名>" --game Normal --types Texture2D --containers "SongPackage/Single/<曲名>"
+  # 取 Header.png（分难度版 Header_TT/DM/RU 也一并取出），转 RGB 存 images\<内部名>.png
+  ```
+
+  MIRЯOЯ 的容器是 `SongPackage/Ryceam/MIRROR`（`--containers` 匹配不上时改用
+  `--names "Header"` 再按目录区分）。
+- 处理：按需裁切/缩放后存为 `images\<曲名>.png`（存内部名或显示名均可，
+  运行时按 曲名/原曲名/别名+难度变体 匹配）
+- **完整性检查**（每次更新必做）：对照全量定数表检查每首都有曲绘：
+
+  ```bash
+  # 输出缺失曲绘的曲目（对照定数表，与运行时 find_cover 同逻辑）
   python scripts/check-covers.py
   ```
 
-  新曲的曲绘若在 `Texture2D\` 里找不到源文件（如个别联动曲未导出封面），
-  记录在案并人工从游戏内截图/官方渠道补充。
+  新曲的曲绘若在 APK 里找不到源文件（不在 catalog.json 中、服务器下发曲），
+  记录在案并人工从游戏内截图/官方渠道补充。**当前记录（3 首）**：
+  `終わりの少女 feat. こにゃばた (full)`（章节曲包表条目）、
+  `小登厨`（small DENG kitchen）、`蜜糖色的回响`（The Echo of Peach Color）——
+  均不在 Addressables catalog 中，无本地曲绘资源。
 - 上传：
 
   ```bash
