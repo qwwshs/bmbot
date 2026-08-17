@@ -85,29 +85,29 @@ def _resolve_alias(query: str) -> str | None:
 
 
 def _entry_variants(name: str, entry: dict) -> frozenset[str]:
-    """条目变体集合：曲名 + 「原曲名」（中文/日文原名）。"""
+    """条目变体集合：曲名 + 「原曲名」+「别名」（游戏内部名等）。"""
     variants = set(normalized_variants(name))
     original = str(entry.get("originalName") or "").strip()
     if original and original != name:
         variants |= normalized_variants(original)
+    for alias_raw in entry.get("aliases") or []:
+        alias = str(alias_raw).strip()
+        if alias and alias != name:
+            variants |= normalized_variants(alias)
     return frozenset(variants)
 
 
-def search_songs(constants: dict[str, dict], query: str) -> list[str]:
-    """搜索曲目：别名/归一化变体精确匹配优先，否则按子串位置排序的模糊匹配。"""
-    resolved = _resolve_alias(query)
-    if resolved is not None and resolved in constants:
-        return [resolved]
-    q_variants = normalized_variants(query)
-    if not any(q_variants):
-        return []
-    exact = [
+def _resolve_alias_target(constants: dict[str, dict], target: str) -> list[str]:
+    """用户别名目标不在表内时（定数表改键），按曲名变体回退解析。"""
+    return [
         name
         for name, entry in constants.items()
-        if _entry_variants(name, entry) & q_variants
+        if _entry_variants(name, entry) & normalized_variants(target)
     ]
-    if exact:
-        return exact
+
+
+def _fuzzy_search(constants: dict[str, dict], q_variants: frozenset[str]) -> list[str]:
+    """子串模糊匹配：按子串出现位置（越靠前越相关）排序，截断到上限。"""
     hits: list[tuple[int, str]] = []
     for name, entry in constants.items():
         entry_variants = _entry_variants(name, entry)
@@ -123,9 +123,42 @@ def search_songs(constants: dict[str, dict], query: str) -> list[str]:
     return [name for _, name in hits][:_SEARCH_LIMIT]
 
 
-def get_song_scores(data: dict, song_name: str) -> list[tuple[str, int, str]]:
-    """按难度顺序返回 ``(难度, 分数, 等级)``，0 分/无成绩的难度跳过。"""
-    norm = normalize_n10_name(song_name)
+def search_songs(constants: dict[str, dict], query: str) -> list[str]:
+    """搜索曲目：别名/归一化变体精确匹配优先，否则按子串位置排序的模糊匹配。"""
+    resolved = _resolve_alias(query)
+    if resolved is not None:
+        if resolved in constants:
+            return [resolved]
+        fallback = _resolve_alias_target(constants, resolved)
+        if fallback:
+            return fallback
+    q_variants = normalized_variants(query)
+    if not any(q_variants):
+        return []
+    exact = [
+        name
+        for name, entry in constants.items()
+        if _entry_variants(name, entry) & q_variants
+    ]
+    if exact:
+        return exact
+    return _fuzzy_search(constants, q_variants)
+
+
+def get_song_scores(
+    data: dict, song_name: str, entry: dict | None = None
+) -> list[tuple[str, int, str]]:
+    """按难度顺序返回 ``(难度, 分数, 等级)``，0 分/无成绩的难度跳过。
+
+    存档 ``BestScore_`` 键用游戏内部名，与表内曲名（显示名）可能不同，
+    依次尝试 别名（内部名）→ 曲名 → 原曲名 的归一化形式。
+    """
+    candidates = [str(a).strip() for a in (entry or {}).get("aliases") or []]
+    candidates.append(song_name)
+    original = str((entry or {}).get("originalName") or "").strip()
+    if original and original not in candidates:
+        candidates.append(original)
+    wanted = [normalize_n10_name(c) for c in candidates if c]
     index: dict[tuple[str, str], int] = {}
     for key, value in data.items():
         if not key.startswith("BestScore_"):
@@ -141,7 +174,9 @@ def get_song_scores(data: dict, song_name: str) -> list[tuple[str, int, str]]:
         index[(name, parts[-1])] = score
     result: list[tuple[str, int, str]] = []
     for diff in ALL_DIFFS:
-        score = index.get((norm, diff))
+        score = next(
+            (index[(w, diff)] for w in wanted if index.get((w, diff))), None
+        )
         if score and score > 0:
             result.append((diff, score, get_grade(score)))
     return result
@@ -183,15 +218,25 @@ def format_song_detail(
 
 
 def find_cover(name: str, entry: dict) -> Path | None:
-    """查找曲绘：难度变体 → 原曲名 → 表内曲名。"""
+    """查找曲绘：曲名/原曲名/别名（内部名）的各难度与裸名变体。"""
+    original = str(entry.get("originalName") or "").strip()
+    bases = [name]
+    if original and original not in bases:
+        bases.append(original)
+    for alias_raw in entry.get("aliases") or []:
+        alias = str(alias_raw).strip()
+        if alias and alias not in bases:
+            bases.append(alias)
     candidates: list[str] = []
-    original = str(entry.get("originalName") or "")
-    for diff in ALL_DIFFS:
-        if original:
-            candidates.append(f"{original}_{diff}.png")
-        candidates.append(f"{name}_{diff}.png")
-    candidates.append(f"{original}.png")
-    candidates.append(f"{name}.png")
+    for base in bases:
+        # 内部名可能含连续空格（如 "Dream   Hard   Find"），文件名为单空格
+        collapsed = " ".join(base.split())
+        for variant in (base, collapsed):
+            if variant and f"{variant}.png" not in candidates:
+                candidates.append(f"{variant}.png")
+        for diff in ALL_DIFFS:
+            candidates.append(f"{base}_{diff}.png")
+            candidates.append(f"{collapsed}_{diff}.png")
     for filename in candidates:
         path = IMAGE_DIR / filename
         if path.exists():

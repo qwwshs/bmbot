@@ -1100,6 +1100,20 @@ def _locate_chart(
     return None
 
 
+def _song_file_names(song: str) -> list[str]:
+    """谱面文件名候选：表内曲名 + 原曲名 + 别名（谱面文件按游戏内部名命名）。"""
+    entry = get_song_constants().get(song) or {}
+    candidates = [song]
+    original = str(entry.get("originalName") or "").strip()
+    if original and original not in candidates:
+        candidates.append(original)
+    for alias_raw in entry.get("aliases") or []:
+        alias = str(alias_raw).strip()
+        if alias and alias not in candidates:
+            candidates.append(alias)
+    return candidates
+
+
 def _chart_file(song: str, diff: str) -> tuple[Path, str] | None:
     """查找 ``chart/<曲名> <难度>[.txt]``，直接路径优先，索引（小写）兜底。"""
     for suffix in ("", ".txt"):
@@ -1107,7 +1121,10 @@ def _chart_file(song: str, diff: str) -> tuple[Path, str] | None:
         if direct.exists():
             return direct, diff
     index = _chart_index()
-    for candidate in (song, *_name_variants(song)):
+    names: list[str] = []
+    for candidate in _song_file_names(song):
+        names.extend((candidate, *_name_variants(candidate)))
+    for candidate in names:
         for filename in index.get(candidate.lower(), []):
             base = filename[:-4] if filename.lower().endswith(".txt") else filename
             if base.endswith(f" {diff}"):

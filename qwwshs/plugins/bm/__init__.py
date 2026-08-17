@@ -122,7 +122,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.7.31"
+BM_VERSION = "0.7.32"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -936,7 +936,7 @@ async def _send_song_detail(matcher: Matcher, qq: str, name: str) -> None:
         scores: list[tuple[str, int, str]] = []
         hint = "\n💡 发送 /bmbind 绑定存档后可查看成绩"
     else:
-        scores = get_song_scores(binding["data"], name)
+        scores = get_song_scores(binding["data"], name, entry)
         hint = ""
     text = format_song_detail(name, entry, scores) + hint
     cover = find_cover(name, entry)
