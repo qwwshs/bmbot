@@ -122,7 +122,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.7.32"
+BM_VERSION = "0.7.33"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -474,7 +474,6 @@ bm_help = on_command("bmhelp", priority=5, block=True)
 bm_bind = on_command("bmbind", priority=5, block=True)
 bm_export = on_command("bmexport", priority=5, block=True)
 bm_export_revoke = on_message(priority=10, block=False)
-bm_day = on_command("bmday", priority=5, block=True)
 bm_rating = on_command("bmrating", priority=5, block=True)
 bm_song = on_command("bmsong", priority=5, block=True)
 bm_version = on_command("bmbotversion", priority=5, block=True)
@@ -588,50 +587,6 @@ async def handle_export_revoke(bot: Bot, event: MessageEvent) -> None:
         await bm_export_revoke.send("✅ 已撤回导出文件")
     else:
         await bm_export_revoke.send("⚠️ 撤回失败，请手动删除群文件")
-
-
-@bm_day.handle()
-async def handle_day(event: MessageEvent) -> None:
-    """查询自己每日挑战的状态（上次完成日期 / 获得的票 / 今日是否已完成）。
-
-    每日挑战为本地确定性生成（反汇编 TimeSystem/MoonChallengeController 确认）：
-    - ``GetDateFactor()`` = 当前日期 YYYYMMDD 整数（year*10000+month*100+day）
-    - 每日挑战随机种子 ``_random = GetDateFactor() + 3289458``，
-      经 ``Mathf.Repeat`` 取模后对挑战池加权随机采样（3 个候选挑战各带
-      Vector2 权重区间；挑战规则类型有章节/曲目/等级/随机曲/随机谱/速度/血条等）
-    - 存档记录 ``Date_DailyChallenge``（最近完成日期）与
-      ``Ticket_DailyChallenge``（获得的票数）
-    """
-    qq = str(event.user_id)
-    binding = _bindings.get(qq)
-    if binding is None:
-        await bm_day.finish("❌ 尚未绑定存档，请先 /bmbind 绑定后再查询")
-    data = binding["data"]
-    name = binding.get("name") or str(data.get("AccountName") or "未知玩家")
-    date_str = str(data.get("Date_DailyChallenge") or "").strip()
-    ticket = str(data.get("Ticket_DailyChallenge") or "").strip()
-    today = time.strftime("%Y%m%d")
-    # 复现游戏内的日期因子与每日挑战随机种子
-    try:
-        date_factor = int(today)
-        seed = date_factor + 3289458
-    except ValueError:
-        date_factor = seed = None
-    lines = [f"🎯 {name} 的每日挑战"]
-    if date_str:
-        done = "✅ 今天已完成" if date_str == today else "❌ 今天还未完成"
-        lines.append(f"最近完成：{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}（{done}）")
-    else:
-        lines.append("最近完成：从未挑战过每日挑战")
-    if ticket:
-        lines.append(f"获得的票：{ticket}")
-    if date_factor is not None:
-        lines.append(f"今日日期因子：{date_factor}（每日挑战随机种子 {seed}）")
-    lines.append(
-        "📌 每日挑战在本地按日期确定性生成（日期因子 + 偏移作为随机种子，"
-        "对挑战池加权采样），完成后可获得 Ticket 奖励"
-    )
-    await bm_day.finish("\n".join(lines))
 
 
 @bm_version.handle()
