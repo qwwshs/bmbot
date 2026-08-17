@@ -284,6 +284,23 @@ def _cover_candidates(name: str) -> list[str]:
     return candidates
 
 
+# images/ 小写文件名索引：服务器 Linux 区分大小写，Windows 开发机不区分，
+# 大小写不一致时（如 Love in adversity.png）精确匹配在服务器上会漏
+_image_index: dict[str, Path] = {}
+
+
+def _find_image(filename: str) -> Path | None:
+    """按精确名找曲绘文件，找不到再按小写索引回退（两端行为对齐）。"""
+    path = IMAGE_DIR / filename
+    if path.exists():
+        return path
+    if not _image_index and IMAGE_DIR.is_dir():
+        for item in IMAGE_DIR.iterdir():
+            if item.is_file():
+                _image_index[item.name.lower()] = item
+    return _image_index.get(filename.lower())
+
+
 def load_cover(name: str, diff: str) -> Image.Image | None:
     """按 曲名_难度 → 曲名 → 别名（内部名）→ GS 转义/空白折叠 查找曲绘。"""
     thumb = _thumb_path(name, diff)
@@ -294,8 +311,8 @@ def load_cover(name: str, diff: str) -> Image.Image | None:
             pass
     for candidate in _cover_candidates(name):
         for filename in (f"{candidate}_{diff}.png", f"{candidate}.png"):
-            source = IMAGE_DIR / filename
-            if not source.exists():
+            source = _find_image(filename)
+            if source is None:
                 continue
             try:
                 with Image.open(source) as im:

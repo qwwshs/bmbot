@@ -15,6 +15,19 @@ from .rating import ALL_DIFFS, get_grade, normalize_n10_name, normalized_variant
 
 IMAGE_DIR = Path(__file__).resolve().parent / "images"
 
+# 文件名小写索引（服务器 Linux 区分大小写，Windows 开发机不区分，
+# 大小写不一致时精确匹配在服务器上会漏——见 love_in_adversity 踩坑）
+_image_index: dict[str, Path] = {}
+
+
+def _image_dir_index() -> dict[str, Path]:
+    """images/ 的 小写文件名 → 路径 索引（模块级缓存）。"""
+    if not _image_index and IMAGE_DIR.is_dir():
+        for path in IMAGE_DIR.iterdir():
+            if path.is_file():
+                _image_index[path.name.lower()] = path
+    return _image_index
+
 _SEARCH_LIMIT = 20
 _MIN_KEY_PARTS = 3
 
@@ -217,8 +230,8 @@ def format_song_detail(
     return "\n".join(lines)
 
 
-def find_cover(name: str, entry: dict) -> Path | None:
-    """查找曲绘：曲名/原曲名/别名（内部名）的各难度与裸名变体。"""
+def _cover_filename_candidates(name: str, entry: dict) -> list[str]:
+    """曲名/原曲名/别名（内部名）的各难度与裸名变体文件名。"""
     original = str(entry.get("originalName") or "").strip()
     bases = [name]
     if original and original not in bases:
@@ -237,8 +250,21 @@ def find_cover(name: str, entry: dict) -> Path | None:
         for diff in ALL_DIFFS:
             candidates.append(f"{base}_{diff}.png")
             candidates.append(f"{collapsed}_{diff}.png")
+    return candidates
+
+
+def find_cover(name: str, entry: dict) -> Path | None:
+    """查找曲绘：曲名/原曲名/别名（内部名）变体，大小写不敏感回退。"""
+    candidates = _cover_filename_candidates(name, entry)
     for filename in candidates:
         path = IMAGE_DIR / filename
         if path.exists():
+            return path
+    # 大小写不敏感回退（Windows 上 path.exists() 对大小写不敏感，
+    # 服务器上需要借助索引；两端行为对齐）
+    index = _image_dir_index()
+    for filename in candidates:
+        path = index.get(filename.lower())
+        if path is not None:
             return path
     return None

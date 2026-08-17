@@ -46,7 +46,7 @@ def main() -> int:
         for name, entry in missing:
             aliases = ", ".join(str(a) for a in entry.get("aliases") or [])
             print(f"  - {name!r}（别名: {aliases or '无'}）")
-        print("（个别曲目 APK 内无曲绘资源、需人工补充，见 UPDATE.md 5.1 记录）")
+        print("（部分曲目已下架/无曲绘源、属预期缺失，见 UPDATE.md 5.1 记录）")
         return 1
     print("✓ 全部曲目都有曲绘")
     return 0

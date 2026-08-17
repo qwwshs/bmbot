@@ -116,10 +116,27 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
   # 取 Header.png（分难度版 Header_TT/DM/RU 也一并取出），转 RGB 存 images\<内部名>.png
   ```
 
-  MIRЯOЯ 的容器是 `SongPackage/Ryceam/MIRROR`（`--containers` 匹配不上时改用
-  `--names "Header"` 再按目录区分）。
+  MIRЯOЯ（Ryceam 章节）在当前 APK bundle 无实体、旧解包中也没有——
+  `--names` 提取会拿到**别的歌**的同名 Header（已踩坑）。bundle 里查不到
+  容器的曲目视为无本地曲绘源。该曲已下架，曲绘不必补充。
+- **重要事实：本游戏没有服务器**——所有资源（含 SideStory/Ryceam 等章节）
+  都打进 APK 本地；「服务器下发」是早期误判。当前 APK 的 Addressables bundle
+  只含基础章节，SideStory 1 / Ryceam 等章节素材来自**更早版本的解包**
+  （如 BLACK DIAMOND 的曲绘）。新 APK 更新后这些章节可能重新入包，
+  用下面方法从 bundle 精确提取即可。
+- Info 中**没有曲绘字段**（字段只有 Path/Title/Artist/Painter/Tag 等，
+  `Painter` 是画师人名）；曲绘按内部名对应 SongPackage 容器的 Header.png。
 - 处理：按需裁切/缩放后存为 `images\<曲名>.png`（存内部名或显示名均可，
-  运行时按 曲名/原曲名/别名+难度变体 匹配）
+  运行时按 曲名/原曲名/别名+难度变体 匹配，大小写不敏感）
+- **文件名大小写**（love_in_adversity 踩坑）：Windows 不区分大小写，
+  服务器 Linux 区分——文件名与曲名大小写不一致时服务器上会缺图。
+  运行时已加小写索引回退（song.py/render.py），但新增曲绘仍应尽量
+  与曲名大小写一致。
+- **同名曲目曲绘区分**（Ether Vortex 踩坑）：显示名 `Ether Vortex` 的内部名
+  是 `Ether Vortex Final`，Remix 版显示名 `Ether Vortex (Chikanya Remix)` 的
+  内部名才是 `Ether Vortex`。曲绘文件用**显示名**命名（`Ether Vortex Final.png`
+  对应原版、`Ether Vortex (Chikanya Remix).png` 对应 Remix），避免原版按曲名
+  优先命中 Remix 的图。
 - **完整性检查**（每次更新必做）：对照全量定数表检查每首都有曲绘：
 
   ```bash
@@ -127,11 +144,14 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
   python scripts/check-covers.py
   ```
 
-  新曲的曲绘若在 APK 里找不到源文件（不在 catalog.json 中、服务器下发曲），
-  记录在案并人工从游戏内截图/官方渠道补充。**当前记录（3 首）**：
-  `終わりの少女 feat. こにゃばた (full)`（章节曲包表条目）、
-  `小登厨`（small DENG kitchen）、`蜜糖色的回响`（The Echo of Peach Color）——
-  均不在 Addressables catalog 中，无本地曲绘资源。
+  注意 Windows 开发机上大小写不敏感会掩盖问题，脚本已模拟 Linux
+  严格匹配（song.py 的小写索引回退会被计入命中）。
+- **不用管的曲目（check-covers 报缺失属预期）**：
+  - **游戏已下架（曲绘已删，勿再补充）**：`Varcolac`、`始め恋`（lian）、
+    `MIRЯOЯ`（MIRROR）
+  - **当前 APK 无曲绘源（章节曲包表/未发布曲目，需人工从游戏截图补充）**：
+    `終わりの少女 feat. こにゃばた (full)`、`小登厨`（small DENG kitchen）、
+    `蜜糖色的回响`（The Echo of Peach Color）
 - 上传：
 
   ```bash
