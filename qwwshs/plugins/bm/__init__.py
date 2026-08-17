@@ -122,7 +122,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.7.26"
+BM_VERSION = "0.7.27"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -594,9 +594,13 @@ async def handle_export_revoke(bot: Bot, event: MessageEvent) -> None:
 async def handle_day(event: MessageEvent) -> None:
     """查询自己每日挑战的状态（上次完成日期 / 获得的票 / 今日是否已完成）。
 
-    每日挑战的曲目与规则由游戏服务器每日下发，存档只记录
-    ``Date_DailyChallenge``（上次完成日期，YYYYMMDD）与
-    ``Ticket_DailyChallenge``（获得的票数）。
+    每日挑战为本地确定性生成（反汇编 TimeSystem/MoonChallengeController 确认）：
+    - ``GetDateFactor()`` = 当前日期 YYYYMMDD 整数（year*10000+month*100+day）
+    - 每日挑战随机种子 ``_random = GetDateFactor() + 3289458``，
+      经 ``Mathf.Repeat`` 取模后对挑战池加权随机采样（3 个候选挑战各带
+      Vector2 权重区间；挑战规则类型有章节/曲目/等级/随机曲/随机谱/速度/血条等）
+    - 存档记录 ``Date_DailyChallenge``（最近完成日期）与
+      ``Ticket_DailyChallenge``（获得的票数）
     """
     qq = str(event.user_id)
     binding = _bindings.get(qq)
@@ -607,6 +611,12 @@ async def handle_day(event: MessageEvent) -> None:
     date_str = str(data.get("Date_DailyChallenge") or "").strip()
     ticket = str(data.get("Ticket_DailyChallenge") or "").strip()
     today = time.strftime("%Y%m%d")
+    # 复现游戏内的日期因子与每日挑战随机种子
+    try:
+        date_factor = int(today)
+        seed = date_factor + 3289458
+    except ValueError:
+        date_factor = seed = None
     lines = [f"🎯 {name} 的每日挑战"]
     if date_str:
         done = "✅ 今天已完成" if date_str == today else "❌ 今天还未完成"
@@ -615,9 +625,11 @@ async def handle_day(event: MessageEvent) -> None:
         lines.append("最近完成：从未挑战过每日挑战")
     if ticket:
         lines.append(f"获得的票：{ticket}")
+    if date_factor is not None:
+        lines.append(f"今日日期因子：{date_factor}（每日挑战随机种子 {seed}）")
     lines.append(
-        "📌 每日挑战的曲目与规则由游戏服务器每天刷新，"
-        "完成后可获得 Ticket 奖励（存档记录最近完成日期）"
+        "📌 每日挑战在本地按日期确定性生成（日期因子 + 偏移作为随机种子，"
+        "对挑战池加权采样），完成后可获得 Ticket 奖励"
     )
     await bm_day.finish("\n".join(lines))
 
