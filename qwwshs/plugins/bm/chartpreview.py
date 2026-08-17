@@ -576,8 +576,8 @@ def _v_bezier_value(points: list[float]) -> float:
     )
 
 
-def _easing(name: str, value: float) -> float:
-    """easings.net 缓动函数（Quad/Cubic 系列）。"""
+def _easing(name: str, value: float) -> float:  # noqa: C901, PLR0911
+    """缓动函数（对称系列 Quad/Cubic 等 + 游戏原式 Back/Elastic/Bounce）。"""
     t = min(1.0, max(0.0, value))
     if name == "linear":
         return t
@@ -586,6 +586,12 @@ def _easing(name: str, value: float) -> float:
         if name.startswith(prefix):
             kind, phase = name[len(prefix) :], prefix
             break
+    if kind == "Back":
+        return _ease_back(phase, t)
+    if kind == "Elastic":
+        return _ease_elastic(phase, t)
+    if kind == "Bounce":
+        return _ease_bounce(phase, t)
     if kind not in ("Quad", "Cubic", "Quart", "Quint", "Sine", "Expo", "Circ"):
         raise _FormulaError(f"不支持的缓动函数 {name}")  # noqa: TRY003
     if phase == "easeIn":
@@ -595,6 +601,74 @@ def _easing(name: str, value: float) -> float:
     if t < 0.5:  # noqa: PLR2004
         return _ease_in(kind, 2 * t) / 2
     return 1 - _ease_in(kind, 2 - 2 * t) / 2
+
+
+def _ease_back(phase: str, t: float) -> float:
+    """Back 系列（游戏 Func_Base 同款系数）。"""
+    c1 = 1.70158
+    if phase == "easeIn":
+        c3 = c1 + 1
+        return c3 * t**3 - c1 * t * t
+    if phase == "easeOut":
+        c3 = c1 + 1
+        return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2
+    c2 = c1 * 1.525
+    if t < 0.5:  # noqa: PLR2004
+        return (math.pow(2 * t, 2) * ((c2 + 1) * 2 * t - c2)) / 2
+    return (math.pow(2 * t - 2, 2) * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2
+
+
+def _ease_elastic(phase: str, t: float) -> float:  # noqa: PLR0911
+    """Elastic 系列（游戏 Func_Base 同款系数）。"""
+    if phase == "easeIn":
+        c4 = 2 * math.pi / 3
+        if t == 0:
+            return 0.0
+        if t == 1:
+            return 1.0
+        return -math.pow(2, 10 * t - 10) * math.sin((t * 10 - 10.75) * c4)
+    if phase == "easeOut":
+        c4 = 2 * math.pi / 3
+        if t == 0:
+            return 0.0
+        if t == 1:
+            return 1.0
+        return math.pow(2, -10 * t) * math.sin((t * 10 - 0.75) * c4) + 1
+    c5 = 2 * math.pi / 4.5
+    if t == 0:
+        return 0.0
+    if t == 1:
+        return 1.0
+    if t < 0.5:  # noqa: PLR2004
+        return -(math.pow(2, 20 * t - 10) * math.sin((20 * t - 11.125) * c5)) / 2
+    return (math.pow(2, -20 * t + 10) * math.sin((20 * t - 11.125) * c5)) / 2 + 1
+
+
+def _ease_bounce(phase: str, t: float) -> float:
+    """Bounce 系列（游戏 Func_Base 同款分段）。"""
+    if phase == "easeIn":
+        return 1 - _ease_out_bounce(t)
+    if phase == "easeOut":
+        return _ease_out_bounce(t)
+    if t < 0.5:  # noqa: PLR2004
+        return (1 - _ease_out_bounce(1 - 2 * t)) / 2
+    return (1 + _ease_out_bounce(2 * t - 1)) / 2
+
+
+def _ease_out_bounce(t: float) -> float:
+    """easeOutBounce（游戏同款 n1=7.5625 / d1=2.75 分段）。"""
+    n1 = 7.5625
+    d1 = 2.75
+    if t < 1 / d1:
+        return n1 * t * t
+    if t < 2 / d1:
+        t -= 1.5 / d1
+        return n1 * t * t + 0.75
+    if t < 2.5 / d1:
+        t -= 2.25 / d1
+        return n1 * t * t + 0.9375
+    t -= 2.625 / d1
+    return n1 * t * t + 0.984375
 
 
 def _ease_in(kind: str, t: float) -> float:  # noqa: PLR0911
