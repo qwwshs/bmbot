@@ -571,7 +571,9 @@ def _v_bezier_value(points: list[float]) -> float:
     right_mid = (c[right] + c[right + 1]) / 2.0
     left_point = c[left] + 0.5 * blur * (mid_mid - left_mid)
     right_point = c[right] + 0.5 * blur * (mid_mid - right_mid)
-    return _bezier_value([c[left], left_point, right_point, c[right]], delta * seg - left)
+    return _bezier_value(
+        [c[left], left_point, right_point, c[right]], delta * seg - left
+    )
 
 
 def _easing(name: str, value: float) -> float:
