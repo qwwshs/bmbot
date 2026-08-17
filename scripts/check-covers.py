@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -40,7 +39,9 @@ def main() -> int:
         title = re.search(r'\$\s*Title\s*=\s*"([^"]*)"', body)
         if key:
             songs.append((key.group(1), title.group(1) if title else key.group(1)))
-    covers = {norm(f[:-4]) for f in os.listdir(IMAGE_DIR) if f.endswith(".png")}
+    covers = {
+        norm(f.stem) for f in IMAGE_DIR.iterdir() if f.suffix == ".png"
+    }
     missing = [
         (key, title)
         for key, title in songs
