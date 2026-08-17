@@ -17,10 +17,31 @@ from __future__ import annotations
 import importlib
 import sys
 import types
+import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BM_DIR = ROOT / "qwwshs" / "plugins" / "bm"
+
+# 已知无曲绘、属预期的曲目（键为定数表曲名，比较经 NFC 规范化——
+# 日文假名浊点在定数表里是分解形式 は+゙，手打常为预组合 ば）。
+# 清单与 UPDATE.md 5.1 保持同步：
+# - 游戏已下架（曲绘已删，勿再补充）
+# - 当前 APK 无曲绘源（需人工从游戏截图补充，补充后从本清单移除）
+EXPECTED_MISSING = {
+    "Varcolac",
+    "始め恋",
+    "MIRЯOЯ",
+    "終わりの少女\nfeat. こにゃばた (full)",
+    "小登厨",
+    "蜜糖色的回响",
+}
+
+_EXPECTED_MISSING_NFC = {unicodedata.normalize("NFC", n) for n in EXPECTED_MISSING}
+
+
+def _is_expected_missing(name: str) -> bool:
+    return unicodedata.normalize("NFC", name) in _EXPECTED_MISSING_NFC
 
 
 def _load_modules() -> tuple:
@@ -41,14 +62,20 @@ def main() -> int:
     for name, entry in consts.items():
         if song.find_cover(name, entry) is None:
             missing.append((name, entry))
+    unexpected = [(n, e) for n, e in missing if not _is_expected_missing(n)]
     if missing:
-        print(f"✗ 缺失曲绘 {len(missing)} 首：")
+        print(f"缺失曲绘 {len(missing)} 首：")
         for name, entry in missing:
+            mark = "（预期，见 UPDATE.md 5.1）" if _is_expected_missing(name) else ""
             aliases = ", ".join(str(a) for a in entry.get("aliases") or [])
-            print(f"  - {name!r}（别名: {aliases or '无'}）")
-        print("（部分曲目已下架/无曲绘源、属预期缺失，见 UPDATE.md 5.1 记录）")
+            print(f"  - {name!r}（别名: {aliases or '无'}）{mark}")
+    if unexpected:
+        print(f"✗ 存在 {len(unexpected)} 首非预期缺失，请补充曲绘或更新预期清单")
         return 1
-    print("✓ 全部曲目都有曲绘")
+    if missing:
+        print(f"✓ 仅有预期内缺失（{len(missing)} 首，已下架/无源）")
+    else:
+        print("✓ 全部曲目都有曲绘")
     return 0
 
 
