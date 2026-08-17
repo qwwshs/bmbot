@@ -285,7 +285,7 @@ def _cover_candidates(name: str) -> list[str]:
 
 
 def load_cover(name: str, diff: str) -> Image.Image | None:
-    """按 曲名_难度 → 曲名 → 别名（内部名）→ GS 转义/空白折叠 查找曲绘，未找到返回 None。"""
+    """按 曲名_难度 → 曲名 → 别名（内部名）→ GS 转义/空白折叠 查找曲绘。"""
     thumb = _thumb_path(name, diff)
     if thumb.exists():
         try:
