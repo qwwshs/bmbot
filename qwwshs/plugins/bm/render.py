@@ -650,10 +650,16 @@ def _wrap_lines(
     max_w: int,
     max_lines: int,
 ) -> list[str] | None:
-    """字符级换行；超出 max_lines 行返回 None。"""
+    """字符级换行；显式 ``\\n``/``\\r`` 为硬换行；超出 max_lines 行返回 None。"""
     lines: list[str] = []
     current = ""
     for ch in text:
+        if ch in "\r\n":
+            lines.append(current)
+            current = ""
+            if len(lines) >= max_lines:
+                return None
+            continue
         if not current:
             current = ch
             continue
