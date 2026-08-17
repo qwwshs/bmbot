@@ -501,6 +501,79 @@ def _bezier_value(points: list[float], value: float) -> float:
     return work[0]
 
 
+def _c_bezier_value(points: list[float]) -> float:
+    """c_bezier：控制点平滑贝塞尔（末两参数为 delta、blur）。
+
+    与游戏 Func_Base.c_bezier 逐行一致：把 delta 所在的段两端控制点
+    按相邻段长度比例向中点偏移 blur 倍，再取 3/4 点贝塞尔。
+    """
+    c = list(points)
+    seg = len(c) - 3
+    delta = c[-2]
+    blur = c[-1]
+    left = max(0, min(seg - 1, math.floor(delta * seg)))
+    right = left + 1
+    if left == 0:
+        mid_mid = (c[0] + c[1]) / 2.0
+        right_mid = (c[1] + c[2]) / 2.0
+        mid_len = abs(c[1] - c[0])
+        right_len = abs(c[2] - c[1])
+        right_percent = mid_len / (right_len + mid_len)
+        right_point = c[1] + right_percent * blur * (mid_mid - right_mid)
+        return _bezier_value([c[0], right_point, c[1]], delta * seg - left)
+    if right == seg:
+        left_mid = (c[seg - 2] + c[seg - 1]) / 2.0
+        mid_mid = (c[seg - 1] + c[seg]) / 2.0
+        left_len = abs(c[seg - 1] - c[seg - 2])
+        mid_len = abs(c[seg] - c[seg - 1])
+        left_percent = mid_len / (left_len + mid_len)
+        left_point = c[seg - 1] + left_percent * blur * (mid_mid - left_mid)
+        return _bezier_value(
+            [c[seg - 1], left_point, c[seg]], delta * seg - left
+        )
+    left_mid = (c[left - 1] + c[left]) / 2.0
+    mid_mid = (c[left] + c[right]) / 2.0
+    right_mid = (c[right] + c[right + 1]) / 2.0
+    left_len = abs(c[left] - c[left - 1])
+    mid_len = abs(c[right] - c[left])
+    right_len = abs(c[right + 1] - c[right])
+    left_percent = mid_len / (left_len + mid_len)
+    right_percent = mid_len / (right_len + mid_len)
+    left_point = c[left] + left_percent * blur * (mid_mid - left_mid)
+    right_point = c[right] + right_percent * blur * (mid_mid - right_mid)
+    return _bezier_value(
+        [c[left], left_point, right_point, c[right]], delta * seg - left
+    )
+
+
+def _v_bezier_value(points: list[float]) -> float:
+    """v_bezier：同 c_bezier，但偏移比例固定为 0.5（垂直均衡版）。"""
+    c = list(points)
+    seg = len(c) - 3
+    delta = c[-2]
+    blur = c[-1]
+    left = max(0, min(seg - 1, math.floor(delta * seg)))
+    right = left + 1
+    if left == 0:
+        mid_mid = (c[0] + c[1]) / 2.0
+        right_mid = (c[1] + c[2]) / 2.0
+        right_point = c[1] + 0.5 * blur * (mid_mid - right_mid)
+        return _bezier_value([c[0], right_point, c[1]], delta * seg - left)
+    if right == seg:
+        left_mid = (c[seg - 2] + c[seg - 1]) / 2.0
+        mid_mid = (c[seg - 1] + c[seg]) / 2.0
+        left_point = c[seg - 1] + 0.5 * blur * (mid_mid - left_mid)
+        return _bezier_value(
+            [c[seg - 1], left_point, c[seg]], delta * seg - left
+        )
+    left_mid = (c[left - 1] + c[left]) / 2.0
+    mid_mid = (c[left] + c[right]) / 2.0
+    right_mid = (c[right] + c[right + 1]) / 2.0
+    left_point = c[left] + 0.5 * blur * (mid_mid - left_mid)
+    right_point = c[right] + 0.5 * blur * (mid_mid - right_mid)
+    return _bezier_value([c[left], left_point, right_point, c[right]], delta * seg - left)
+
+
 def _easing(name: str, value: float) -> float:
     """easings.net 缓动函数（Quad/Cubic 系列）。"""
     t = min(1.0, max(0.0, value))
@@ -564,7 +637,7 @@ def _eval_node(node: _Node, env: dict[str, float]) -> float:  # noqa: PLR0911
     if kind == "num":
         return node[1]
     if kind == "var":
-        return env[node[1]]
+        return env.get(node[1], 0.0)  # 游戏 FormulaVar 对未定义变量返回 0
     if kind == "neg":
         return -_eval_node(node[1], env)
     if kind == "op":
@@ -677,6 +750,8 @@ def _register(name: str) -> Callable:
 
 # bezier 至少 2 个控制点 + 1 个 value
 _BEZIER_MIN_ARGS = 3
+# c/v_bezier 至少 2 个控制点 + delta + blur
+_BEZIER_EXT_MIN_ARGS = 4
 
 
 def _call_function(name: str, args: list[float]) -> float:
@@ -783,6 +858,20 @@ def _f_equal(value: float, other: float) -> float:
 @_register("unequal")
 def _f_unequal(value: float, other: float) -> float:
     return 0.0 if value == other else 1.0
+
+
+@_register("c_bezier")
+def _f_c_bezier(*args: float) -> float:
+    if len(args) < _BEZIER_EXT_MIN_ARGS:
+        raise _FormulaError("c_bezier 至少需要 2 个控制点 + delta + blur")  # noqa: TRY003
+    return _c_bezier_value(list(args))
+
+
+@_register("v_bezier")
+def _f_v_bezier(*args: float) -> float:
+    if len(args) < _BEZIER_EXT_MIN_ARGS:
+        raise _FormulaError("v_bezier 至少需要 2 个控制点 + delta + blur")  # noqa: TRY003
+    return _v_bezier_value(list(args))
 
 
 _BLOCK_STMT_RE = re.compile(r"\$?\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*(.*))?$")

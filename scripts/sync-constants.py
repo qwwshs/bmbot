@@ -251,6 +251,14 @@ def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
                 "I": entry.get("charter", {}).get("IL", ""),
                 "K": entry.get("charter", {}).get("TT", ""),
             }
+            # 追加谱面（RU/DM/FL）→ M/N/O 列
+            extra_map = {"RU": "RUIN", "DM": "DREAMY", "FL": "FOOL"}
+            for diff, extra_type in extra_map.items():
+                if entry.get(diff) is not None:
+                    cells["M"] = extra_type
+                    cells["N"] = entry.get("charter", {}).get(diff, "")
+                    cells["O"] = entry.get(diff)
+                    break
             row_el = ET.SubElement(data, f"{{{ns}}}row")
             row_el.set("r", str(new_row))
             row_el.set("spans", "1:16")
