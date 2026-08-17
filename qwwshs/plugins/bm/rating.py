@@ -470,7 +470,8 @@ def _normalized_index(constants: dict[str, dict]) -> dict[str, str]:
     """构建曲名归一化变体 → 表内规范曲名的索引（先到先得）。
 
     变体覆盖大小写、下划线/全角空格、``（RU）`` 后缀、
-    简体/繁体/日文汉字的差异，并纳入条目的「原曲名」（中文/日文原名）。
+    简体/繁体/日文汉字的差异，并纳入条目的「原曲名」（中文/日文原名）
+    与「别名」列（内部名等存档键写法）。
     """
     index: dict[str, str] = {}
     for name, entry in constants.items():
@@ -480,6 +481,11 @@ def _normalized_index(constants: dict[str, dict]) -> dict[str, str]:
         if original and original != name:
             for variant in normalized_variants(original):
                 index.setdefault(variant, name)
+        for alias_raw in entry.get("aliases") or []:
+            alias = str(alias_raw).strip()
+            if alias and alias != name:
+                for variant in normalized_variants(alias):
+                    index.setdefault(variant, name)
     return index
 
 
