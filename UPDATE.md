@@ -180,27 +180,78 @@ git push origin main
 - 注意：`constexcel.xlsx` 可能被 Excel 打开导致写入被锁；脚本会直接覆盖写，
   若仍失败请关闭 Excel 后重试
 
-### 6.3 无法自动入库的曲目
+### 6.3 人工补录：Info 未收录的曲目
 
-Info 中**没有**的曲目（测试谱、未收录谱）不会自动入库，例如：
-`MIRROR`、`The Echo of Peach Color`、`small DENG kitchen`（谱面文件里是
-`_temp_` 临时数据）。这类曲目由人工决定是否补定数。
+Info 中**没有**的曲目（测试谱、未收录谱、新曲抢先版）不会自动入库。
+这类谱面文件里通常是**占位数据**，需要人工补录。示例（已按此流程处理）：
 
-- **新增曲目**：整条写入（定数来自 Info 的 `DLevel`，谱师来自 `Charter`，曲师来自 `Artist`）。
-- **已有曲目**：只补充主表中缺失的难度定数 / 谱师，**不覆盖**已有字段。
-- 运行结果在 gitignore 的 `data/` 下，不会污染仓库；控制台会输出新增/补充报告。
-- 注意：**游戏更新后 Info 会扩大**（示例：旧版 5 首 → 新版 52 首），
-  同步脚本会自动把新曲目全部补进定数表，无需手动维护。
+| 曲目（内部名） | 显示名 | 占位数据 | 正确曲师 |
+| --- | --- | --- | --- |
+| `small DENG kitchen` | 小登厨 | `_temp_1783411654` | AoiGroove真琴 |
+| `The Echo of Peach Color` | 蜜糖色的回响 | `粉丝感谢` | AoiGroove真琴 |
 
-**人工审核与正式入库**（可选，建议定期）：把补充条目合并进正式定数表
-`qwwshs/plugins/bm/constexcel.xlsx`（列：曲名 / 原曲名 / 曲师 / RL·IL·TT 难度与谱师 /
-追加谱面 / 别名），然后删除或保留 `data/bm/constants_extra.json`。
+**识别占位数据**：谱面 `#info` 段的 `Artist`/`Title` 是 `_temp_`、`粉丝感谢`、
+`~欢迎光临...` 等非正式内容时，说明是未正式发布的曲目。
 
-手动运行同步（本地或服务器，仓库根目录）：
+**人工补录步骤**：
 
-```bash
-python scripts/sync-constants.py
-```
+1. **修正谱面文件**（本地 `qwwshs/plugins/bm/chart/`，每个难度都要改）：
+   把 `#info` 段的 `Artist:` 改为正确曲师，`Title:` 改为显示名（如有）：
+
+   ```bash
+   # 示例：修正 Artist 字段（本地 + 服务器）
+   python - <<'EOF'
+   import re
+   from pathlib import Path
+   for name in ["small DENG kitchen IL", "small DENG kitchen RL", "small DENG kitchen TT"]:
+       f = Path(f"qwwshs/plugins/bm/chart/{name}")
+       text = f.read_text(encoding="utf-8-sig", errors="replace")
+       f.write_text(re.sub(r"(?m)^\s*Artist:.*$", "Artist: AoiGroove真琴;", text, count=1),
+                    encoding="utf-8")
+   EOF
+   ```
+
+2. **写入定数表**（仓库根目录，复用 sync-constants 的 xlsx 写入逻辑）：
+
+   ```bash
+   python - <<'EOF'
+   import importlib.util
+   spec = importlib.util.spec_from_file_location("sync", "scripts/sync-constants.py")
+   sync = importlib.util.module_from_spec(spec)
+   spec.loader.exec_module(sync)
+   entries = {
+       "small DENG kitchen": {  # 内部名作 key（与存档 BestScore_ 键一致）
+           "RL": None, "IL": None, "TT": None, "RU": None, "DM": None, "FL": None,
+           "aliases": [], "artist": "AoiGroove真琴", "originalName": "小登厨", "charter": {},
+       },
+   }
+   sync.apply_to_xlsx(entries)
+   EOF
+   ```
+
+   要点：
+   - **key 用内部名**（存档成绩键 `BestScore_<内部名>_<难度>` 靠它匹配）
+   - 显示名（如"小登厨"）放 `originalName` 列
+   - 定数未知时留 `None`，等官方数据出来再补（`RL/IL/TT` 列填小数即可）
+
+3. **上传谱面 + 提交部署**：
+
+   ```bash
+   # 上传修正的谱面到服务器
+   tar -cf - -C qwwshs/plugins/bm/chart "small DENG kitchen IL" ... | \
+     ssh admin@101.132.120.132 "cd /home/admin/nbbot/qwwshs/qwwshs/plugins/bm/chart && tar -xf -"
+   # 提交定数表并部署
+   git add qwwshs/plugins/bm/constexcel.xlsx
+   git commit -m "定数表：人工补录 小登厨 / 蜜糖色的回响（曲师 AoiGroove真琴）"
+   git push origin main
+   ssh admin@101.132.120.132 "cd /home/admin/nbbot/qwwshs && bash scripts/restart-bot.sh"
+   ```
+
+4. **验证**：`/bmsong 小登厨` 能搜到、`/bmchart small deng` 出图、`/bmrating`
+   中新曲成绩可计入（定数补上后）。
+
+> 后续官方补丁发布正式 Info 后，`sync-constants.py` 会自动把这两首的定数
+> （DLevel）与谱师补进补充表，无需重复人工操作。
 
 ## 7. 上传服务器与部署
 
