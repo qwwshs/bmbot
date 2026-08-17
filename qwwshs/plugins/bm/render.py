@@ -1008,13 +1008,18 @@ CHAR_AVATAR_FILES = {
 
 
 def _load_avatar(name: str | None) -> Image.Image | None:
-    """加载角色头像（images/<角色名>.png，名称不一致时查 CHAR_AVATAR_FILES）。"""
+    """加载角色头像（images/<角色名>.png，名称不一致时查 CHAR_AVATAR_FILES）。
+
+    角色头像缺失时回退 Default Head.png（游戏默认头像）。
+    """
     if not name:
         return None
     if name not in _avatar_cache:
         image = None
         filename = CHAR_AVATAR_FILES.get(name, name)
         path = IMAGE_DIR / f"{filename}.png"
+        if not path.exists():
+            path = IMAGE_DIR / "Default Head.png"
         if path.exists():
             try:
                 with Image.open(path) as im:
