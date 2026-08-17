@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .constants import DATA_DIR
+from .constants import DATA_DIR, get_song_constants
 from .rating import (
     ALL_DIFFS,
     GOAL_INCREASE,
@@ -235,27 +235,77 @@ def _center_crop_square(image: Image.Image, size: int) -> Image.Image:
     return cropped.resize((size, size), Image.Resampling.LANCZOS)
 
 
+# GS 脚本 LaTeX 转义还原（曲绘文件名按游戏内部名命名时使用）
+_GS_UNESCAPE = {
+    "/space": " ",
+    "/enter": "\n",
+    "/colon": ":",
+    "/ccolon": "：",
+    "/comma": ",",
+    "/ccomma": "，",
+    "/semi": ";",
+    "/csemi": "；",
+    "/cdot": "。",
+    "/dot": ".",
+    "/lparenthesis": "(",
+    "/rparenthesis": ")",
+    "/lbracket": "[",
+    "/rbracket": "]",
+    "/lbrace": "{",
+    "/rbrace": "}",
+    "/quote": "'",
+    "/dquote": '"',
+    "/bslash": "\\",
+    "/slash": "/",
+    "/equal": "=",
+}
+
+
+def _unescape_gs(name: str) -> str:
+    """GS 转义还原（/space → 空格等），用于曲绘文件名匹配。"""
+    for token, value in _GS_UNESCAPE.items():
+        name = name.replace(token, value)
+    return name
+
+
+def _cover_candidates(name: str) -> list[str]:
+    """曲绘文件名候选：显示名 → GS 转义还原 → 常量别名 → 空白折叠变体。"""
+    entry = get_song_constants().get(name) or {}
+    raw = [name] + [str(a) for a in (entry.get("aliases") or []) if str(a).strip()]
+    candidates: list[str] = []
+    for item in raw:
+        for variant in (
+            item,
+            _unescape_gs(item),
+            " ".join(_unescape_gs(item).split()),
+        ):
+            if variant and variant not in candidates:
+                candidates.append(variant)
+    return candidates
+
+
 def load_cover(name: str, diff: str) -> Image.Image | None:
-    """按 ``曲名_难度`` → ``曲名`` 查找曲绘并生成缩略图，未找到返回 None。"""
+    """按 曲名_难度 → 曲名 → 别名（内部名）→ GS 转义/空白折叠 查找曲绘，未找到返回 None。"""
     thumb = _thumb_path(name, diff)
     if thumb.exists():
         try:
             return Image.open(thumb).convert("RGB")
         except OSError:
             pass
-    for filename in (f"{name}_{diff}.png", f"{name}.png"):
-        source = IMAGE_DIR / filename
-        if not source.exists():
-            continue
-        try:
-            with Image.open(source) as im:
-                square = _center_crop_square(im.convert("RGB"), THUMB_SIZE)
-                THUMBS_DIR.mkdir(parents=True, exist_ok=True)
-                square.save(thumb, "JPEG", quality=88)
-        except OSError:
-            continue
-        else:
-            return square
+    for candidate in _cover_candidates(name):
+        for filename in (f"{candidate}_{diff}.png", f"{candidate}.png"):
+            source = IMAGE_DIR / filename
+            if not source.exists():
+                continue
+            try:
+                with Image.open(source) as im:
+                    square = _center_crop_square(im.convert("RGB"), THUMB_SIZE)
+                    THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+                    square.save(thumb, "JPEG", quality=88)
+            except OSError:
+                continue
+            else:
+                return square
     return None
 
 
