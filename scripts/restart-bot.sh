@@ -13,7 +13,9 @@ echo "==> syncing new chart data into constants"
 python3 scripts/sync-constants.py || echo "sync-constants skipped (non-fatal)"
 
 echo "==> rebuilding /bmchartlist all cache image (if constants changed)"
-python3 scripts/build-all-charts.py || echo "build-all-charts skipped (non-fatal)"
+# 渲染依赖 PIL，优先用 bot 虚拟环境的 python
+if [ -x .venv/bin/python3 ]; then PY=.venv/bin/python3; else PY=python3; fi
+$PY scripts/build-all-charts.py || echo "build-all-charts skipped (non-fatal)"
 
 echo "==> stopping old nb session"
 screen -S nb -X quit 2>/dev/null || true
