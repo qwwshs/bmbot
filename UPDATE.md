@@ -106,6 +106,15 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
 
 - 来源：`ass\Texture2D\<曲名>.png`（如 `3rd Avenue.png`），曲绘按曲名命名
 - 处理：按需裁切/缩放后存为 `images\<曲名>.png`
+- **完整性检查**（每次更新必做）：对照新 Info 的 52 首曲目清单，检查每首都有曲绘：
+
+  ```bash
+  # 输出缺失曲绘的曲目（对照 Info 曲目）
+  python scripts/check-covers.py
+  ```
+
+  新曲的曲绘若在 `Texture2D\` 里找不到源文件（如个别联动曲未导出封面），
+  记录在案并人工从游戏内截图/官方渠道补充。
 - 上传：
 
   ```bash
@@ -130,11 +139,52 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
   scp "E:/nb/test/qwwshs/qwwshs/plugins/bm/images/新角色.png" admin@101.132.120.132:/home/admin/nbbot/qwwshs/qwwshs/plugins/bm/images/
   ```
 
-## 6. 定数表自动同步
+## 6. 定数表更新（每次更新必做）
 
 **机制**：`scripts/sync-constants.py` 扫描 `chart/Info`，把定数表中缺失的曲目
 （含定数 / 谱师 / 曲师）写入 `data/bm/constants_extra.json`；bot 启动加载定数表时
 （`constants.py` 的 `get_song_constants`）自动合并补充条目。**每次部署重启都会自动执行**。
+
+### 6.1 重要规则：曲名用内部名
+
+**存档成绩键（`BestScore_<曲名>_<难度>`）与定数表主表曲名都用「内部名」**，
+不是 Info 的显示名。例如：
+
+| 内部名（主表/存档键） | 显示名（Info 的 Title，存「原曲名」列） |
+| --- | --- |
+| `Infinity` | `IF = Infinity` |
+| `Magic Sink` | `マジックの沈淪` |
+| `Twin Nebula` | `双生のネビュラ` |
+
+sync-constants.py 已按此规则生成条目（内部名作曲名、显示名进原曲名），
+**人工维护定数表时也请遵守**，否则新曲成绩无法匹配。
+
+### 6.2 正式入库（每次更新后执行一次）
+
+补充表（`data/bm/constants_extra.json`）只是运行时合并，**每次游戏更新后
+要正式合并进 `constexcel.xlsx` 并提交**：
+
+```bash
+# 在仓库根目录执行：扫描 Info + 把新曲正式写进 constexcel.xlsx
+python scripts/sync-constants.py --apply
+
+# 检查输出报告（新增了哪些曲目），然后提交部署
+git add qwwshs/plugins/bm/constexcel.xlsx
+git commit -m "定数表：新增 X 首曲目"
+git push origin main
+```
+
+- `--apply` 只追加主表中**没有**的曲目（按内部名归一化匹配），不覆盖已有行
+- 已有曲目缺失难度/谱师时，由运行时补充表自动补（无需改 xlsx）
+- 补充表是幂等的：每次 sync 重新生成，不会累积旧条目
+- 注意：`constexcel.xlsx` 可能被 Excel 打开导致写入被锁；脚本会直接覆盖写，
+  若仍失败请关闭 Excel 后重试
+
+### 6.3 无法自动入库的曲目
+
+Info 中**没有**的曲目（测试谱、未收录谱）不会自动入库，例如：
+`MIRROR`、`The Echo of Peach Color`、`small DENG kitchen`（谱面文件里是
+`_temp_` 临时数据）。这类曲目由人工决定是否补定数。
 
 - **新增曲目**：整条写入（定数来自 Info 的 `DLevel`，谱师来自 `Charter`，曲师来自 `Artist`）。
 - **已有曲目**：只补充主表中缺失的难度定数 / 谱师，**不覆盖**已有字段。
