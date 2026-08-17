@@ -126,10 +126,14 @@ def build_updates(
     added: list[str] = []
     filled: list[str] = []
     for song_key, song in songs.items():
-        title = song["title"] or song_key
+        # 曲名用内部名（存档 BestScore_ 键与主表曲名都用内部名，
+        # 如 "Infinity" / "Magic Sink"；显示名 "IF = Infinity" 存 originalName）
+        title = song_key
+        display = song["title"] or song_key
         canonical = known.get(normalize(title))
         base = base_table.get(canonical) if canonical else None
         entry = empty_entry(title)
+        entry["originalName"] = display
         if song["artist"]:
             entry["artist"] = song["artist"]
         for diff in _ALL_DIFFS:
@@ -184,7 +188,117 @@ def build_updates(
     return updates, added, filled
 
 
+def apply_to_xlsx(entries: dict[str, dict]) -> tuple[int, int]:
+    """把补充曲目正式追加进 constexcel.xlsx（新增行），返回 (新增行数, 跳过数)。
+
+    仅追加主表中没有的曲目；已有曲目由运行时补充表机制补缺失字段。
+    """
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    xlsx_path = ROOT / "qwwshs" / "plugins" / "bm" / "constexcel.xlsx"
+    with zipfile.ZipFile(xlsx_path) as zf:
+        shared_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+        shared = [
+            "".join(t.text or "" for t in si.iter(f"{{{ns}}}t"))
+            for si in shared_root.findall(f"{{{ns}}}si")
+        ]
+        sheet_root = ET.fromstring(zf.read("xl/worksheets/sheet1.xml"))
+        data = sheet_root.find(f".//{{{ns}}}sheetData")
+        rows = data.findall(f"{{{ns}}}row")
+        if not rows:
+            return 0, 0
+        last_row = max(int(r.get("r", "0")) for r in rows)
+        # 已有曲名（归一化）避免重复追加
+        known = set()
+        header = rows[0]
+        for cell in header.findall(f"{{{ns}}}c"):
+            v = cell.find(f"{{{ns}}}v")
+            if cell.get("t") == "s" and v is not None and v.text:
+                name = shared[int(v.text)]
+                if "曲名" in name and "原曲名" not in name:
+                    title_col = cell.get("r", "A")[0]
+        for row in rows[1:]:
+            for cell in row.findall(f"{{{ns}}}c"):
+                if cell.get("r", "").startswith(title_col):
+                    v = cell.find(f"{{{ns}}}v")
+                    if v is not None and cell.get("t") == "s":
+                        known.add(normalize(shared[int(v.text)]))
+                    break
+        # 追加行
+        new_row = last_row
+        added_count = 0
+        skipped = 0
+        for title, entry in entries.items():
+            if normalize(title) in known:
+                skipped += 1
+                continue
+            new_row += 1
+            cells = {
+                "A": title,
+                "B": entry.get("originalName") or title,
+                "C": entry.get("artist") or "",
+                "H": entry.get("RL"),
+                "J": entry.get("IL"),
+                "L": entry.get("TT"),
+                "G": entry.get("charter", {}).get("RL", ""),
+                "I": entry.get("charter", {}).get("IL", ""),
+                "K": entry.get("charter", {}).get("TT", ""),
+            }
+            row_el = ET.SubElement(data, f"{{{ns}}}row")
+            row_el.set("r", str(new_row))
+            row_el.set("spans", "1:16")
+            for col, value in cells.items():
+                if value in (None, ""):
+                    continue
+                cell = ET.SubElement(row_el, f"{{{ns}}}c")
+                cell.set("r", f"{col}{new_row}")
+                v_el = ET.SubElement(cell, f"{{{ns}}}v")
+                if isinstance(value, float):
+                    cell.set("s", "13")
+                    v_el.text = repr(value)
+                else:
+                    text = str(value)
+                    if text in shared:
+                        idx = shared.index(text)
+                    else:
+                        idx = len(shared)
+                        shared.append(text)
+                        si = ET.SubElement(shared_root, f"{{{ns}}}si")
+                        t_el = ET.SubElement(si, f"{{{ns}}}t")
+                        t_el.text = text
+                    cell.set("s", "12")
+                    cell.set("t", "s")
+                    v_el.text = str(idx)
+            added_count += 1
+            known.add(normalize(title))
+        if added_count == 0:
+            return 0, skipped
+        # 写回 xlsx：内存构建新 zip 后直接覆盖写（文件可能被 Excel 以共享读打开，
+        # unlink/replace 会被锁，wb 覆盖写可行）
+        import io
+
+        sheet_xml = ET.tostring(sheet_root, encoding="utf-8", xml_declaration=True)
+        shared_xml = ET.tostring(shared_root, encoding="utf-8", xml_declaration=True)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(xlsx_path) as src, zipfile.ZipFile(buf, "w") as dst:
+            for item in src.infolist():
+                data_bytes = src.read(item.filename)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    data_bytes = sheet_xml
+                elif item.filename == "xl/sharedStrings.xml":
+                    data_bytes = shared_xml
+                dst.writestr(item, data_bytes)
+        with open(xlsx_path, "wb") as fh:
+            fh.write(buf.getvalue())
+        return added_count, skipped
+
+
 def main() -> int:
+    import sys as _sys
+
+    apply_mode = "--apply" in _sys.argv[1:]
     if not CHART_DIR.is_dir():
         print(f"✗ 未找到谱面目录: {CHART_DIR}")
         return 1
@@ -194,28 +308,28 @@ def main() -> int:
         return 1
     print(f"Info: {len(songs)} 首曲目, {len(charts)} 张谱面对照")
     updates, added, filled = build_updates(songs, charts)
-    if not updates:
-        print("✓ 定数表已是最新，无新增/补充")
-        return 0
-    EXTRA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict[str, dict] = {}
-    if EXTRA_PATH.exists():
-        try:
-            existing = json.loads(EXTRA_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            existing = {}
-    existing.update(updates)
-    EXTRA_PATH.write_text(
-        json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    print(f"✚ 新增 {len(added)} 首曲目")
-    for line in added:
-        print(f"  - {line}")
-    if filled:
-        print(f"◔ 补充 {len(filled)} 首已有曲目的缺失难度")
-        for line in filled:
+    if updates:
+        # 补充表幂等重建：只保留本次与主表对比的结果（内部名），
+        # 避免旧版本（显示名）条目录入
+        EXTRA_PATH.parent.mkdir(parents=True, exist_ok=True)
+        EXTRA_PATH.write_text(
+            json.dumps(updates, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"✚ 新增 {len(added)} 首曲目")
+        for line in added:
             print(f"  - {line}")
-    print(f"已写入 {EXTRA_PATH.relative_to(ROOT)}（bot 启动时自动合并）")
+        if filled:
+            print(f"◔ 补充 {len(filled)} 首已有曲目的缺失难度")
+            for line in filled:
+                print(f"  - {line}")
+        print(f"已写入 {EXTRA_PATH.relative_to(ROOT)}（bot 启动时自动合并）")
+    else:
+        print("✓ 定数表已是最新，无新增/补充")
+    if apply_mode:
+        print("\n--apply：合并进正式定数表 constexcel.xlsx")
+        added_count, skipped = apply_to_xlsx(updates)
+        print(f"  ✔ 新增 {added_count} 行（跳过已在主表的 {skipped} 首）")
+        print("  请检查后提交 constexcel.xlsx 并部署")
     return 0
 
 
