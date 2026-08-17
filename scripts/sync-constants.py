@@ -15,6 +15,8 @@ gitignore 的 ``data/`` 下，不会污染仓库。输出报告说明新增/补�
 正式定数表（补充表条目优先于主表，已存在的字段不会被覆盖）。
 """
 
+# ruff: noqa: T201
+
 from __future__ import annotations
 
 import importlib.util
@@ -112,7 +114,7 @@ def empty_entry(title: str) -> dict:
     }
 
 
-def build_updates(
+def build_updates(  # noqa: C901, PLR0912
     songs: dict[str, dict], charts: dict[tuple[str, str], dict]
 ) -> tuple[dict[str, dict], list[str], list[str]]:
     """对比 Info 与定数表，返回 (待写条目, 新增报告, 补充报告)。
@@ -169,9 +171,10 @@ def build_updates(
             updates[title] = patch
             parts = [f"{d}={v}" for d, v in missing.items() if d != "charter"]
             if "charter" in missing:
-                parts.append(
-                    "谱师 " + ", ".join(f"{d}:{n}" for d, n in missing["charter"].items())
+                charter_parts = ", ".join(
+                    f"{d}:{n}" for d, n in missing["charter"].items()
                 )
+                parts.append(f"谱师 {charter_parts}")
             filled.append(f"{title} | 补充 {', '.join(parts)}")
         else:
             updates[title] = entry
@@ -188,13 +191,15 @@ def build_updates(
     return updates, added, filled
 
 
-def apply_to_xlsx(entries: dict[str, dict]) -> tuple[int, int]:
+def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
+    entries: dict[str, dict],
+) -> tuple[int, int]:
     """把补充曲目正式追加进 constexcel.xlsx（新增行），返回 (新增行数, 跳过数)。
 
     仅追加主表中没有的曲目；已有曲目由运行时补充表机制补缺失字段。
     """
-    import zipfile
     import xml.etree.ElementTree as ET
+    import zipfile
 
     ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     xlsx_path = ROOT / "qwwshs" / "plugins" / "bm" / "constexcel.xlsx"
@@ -290,7 +295,7 @@ def apply_to_xlsx(entries: dict[str, dict]) -> tuple[int, int]:
                 elif item.filename == "xl/sharedStrings.xml":
                     data_bytes = shared_xml
                 dst.writestr(item, data_bytes)
-        with open(xlsx_path, "wb") as fh:
+        with xlsx_path.open("wb") as fh:
             fh.write(buf.getvalue())
         return added_count, skipped
 
