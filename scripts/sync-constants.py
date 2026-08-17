@@ -79,6 +79,9 @@ def parse_info() -> tuple[dict[str, dict], dict[tuple[str, str], dict]]:
         else:
             diff = fields.get("Path", "").upper()
             if current and diff:
+                # Level = alpha（未定级占位谱面，如 DLevel=0.001）跳过
+                if not re.search(r"\d", fields.get("Level", "")):
+                    continue
                 charts[(current, diff)] = {
                     "dlevel": fields.get("DLevel", ""),
                     "charter": fields.get("Charter", ""),
@@ -87,8 +90,12 @@ def parse_info() -> tuple[dict[str, dict], dict[tuple[str, str], dict]]:
 
 
 def normalize(name: str) -> str:
-    """曲名归一化（小写、去多余空白），用于匹配定数表已有曲目。"""
-    text = re.sub(r"[_\u3000]+", " ", name.strip())
+    """曲名归一化（小写、去多余空白），用于匹配定数表已有曲目。
+
+    Info 里 ``/space`` 是空格的字面量（游戏内部名），先转成空格再合并空白。
+    """
+    text = re.sub(r"/space", " ", name.strip())
+    text = re.sub(r"[_\u3000]+", " ", text)
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
@@ -114,7 +121,7 @@ def empty_entry(title: str) -> dict:
     }
 
 
-def build_updates(  # noqa: C901, PLR0912
+def build_updates(  # noqa: C901, PLR0912, PLR0915
     songs: dict[str, dict], charts: dict[tuple[str, str], dict]
 ) -> tuple[dict[str, dict], list[str], list[str]]:
     """对比 Info 与定数表，返回 (待写条目, 新增报告, 补充报告)。
@@ -122,7 +129,11 @@ def build_updates(  # noqa: C901, PLR0912
     只同步 Info 中出现的曲目（含定数/谱师/曲师）；已存在的曲目仅补充
     缺失的难度定数与谱师，不覆盖已有字段。
     """
-    known = {normalize(t): t for t in load_constants_standalone()}
+    known: dict[str, str] = {}
+    for t, entry in load_constants_standalone().items():
+        known.setdefault(normalize(t), t)
+        for alias in entry.get("aliases") or []:
+            known.setdefault(normalize(str(alias)), t)
     base_table = load_constants_standalone()
     updates: dict[str, dict] = {}
     added: list[str] = []
@@ -168,7 +179,8 @@ def build_updates(  # noqa: C901, PLR0912
                     patch["charter"].update(value)
                 else:
                     patch[diff] = value
-            updates[title] = patch
+            # 用表内规范名作键：运行时合并按键查主表，内部名≠表名会生成幽灵条目
+            updates[canonical or title] = patch
             parts = [f"{d}={v}" for d, v in missing.items() if d != "charter"]
             if "charter" in missing:
                 charter_parts = ", ".join(
@@ -204,32 +216,48 @@ def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
     ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     xlsx_path = ROOT / "qwwshs" / "plugins" / "bm" / "constexcel.xlsx"
     with zipfile.ZipFile(xlsx_path) as zf:
-        shared_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
-        shared = [
-            "".join(t.text or "" for t in si.iter(f"{{{ns}}}t"))
-            for si in shared_root.findall(f"{{{ns}}}si")
-        ]
+        shared_root = None
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in zf.namelist():
+            shared_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            shared = [
+                "".join(t.text or "" for t in si.iter(f"{{{ns}}}t"))
+                for si in shared_root.findall(f"{{{ns}}}si")
+            ]
         sheet_root = ET.fromstring(zf.read("xl/worksheets/sheet1.xml"))
         data = sheet_root.find(f".//{{{ns}}}sheetData")
         rows = data.findall(f"{{{ns}}}row")
         if not rows:
             return 0, 0
         last_row = max(int(r.get("r", "0")) for r in rows)
+
+        def cell_text(cell: ET.Element) -> str | None:
+            """单元格文本：兼容共享字符串与内联字符串（官方导出格式）。"""
+            v = cell.find(f"{{{ns}}}v")
+            if cell.get("t") == "s" and v is not None and v.text:
+                try:
+                    return shared[int(v.text)]
+                except (ValueError, IndexError):
+                    return None
+            inline = cell.find(f"{{{ns}}}is")
+            if inline is not None:
+                return "".join(t.text or "" for t in inline.iter(f"{{{ns}}}t"))
+            return None
+
         # 已有曲名（归一化）避免重复追加
         known = set()
         header = rows[0]
+        title_col = "A"
         for cell in header.findall(f"{{{ns}}}c"):
-            v = cell.find(f"{{{ns}}}v")
-            if cell.get("t") == "s" and v is not None and v.text:
-                name = shared[int(v.text)]
-                if "曲名" in name and "原曲名" not in name:
-                    title_col = cell.get("r", "A")[0]
+            name = cell_text(cell)
+            if name and "曲名" in name and "原曲名" not in name:
+                title_col = cell.get("r", "A")[0]
         for row in rows[1:]:
             for cell in row.findall(f"{{{ns}}}c"):
                 if cell.get("r", "").startswith(title_col):
-                    v = cell.find(f"{{{ns}}}v")
-                    if v is not None and cell.get("t") == "s":
-                        known.add(normalize(shared[int(v.text)]))
+                    text = cell_text(cell)
+                    if text:
+                        known.add(normalize(text))
                     break
         # 追加行
         new_row = last_row
@@ -267,11 +295,12 @@ def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
                     continue
                 cell = ET.SubElement(row_el, f"{{{ns}}}c")
                 cell.set("r", f"{col}{new_row}")
-                v_el = ET.SubElement(cell, f"{{{ns}}}v")
                 if isinstance(value, float):
                     cell.set("s", "13")
+                    v_el = ET.SubElement(cell, f"{{{ns}}}v")
                     v_el.text = repr(value)
-                else:
+                elif shared_root is not None:
+                    # 共享字符串表存在：追加到 sharedStrings.xml
                     text = str(value)
                     if text in shared:
                         idx = shared.index(text)
@@ -283,7 +312,15 @@ def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
                         t_el.text = text
                     cell.set("s", "12")
                     cell.set("t", "s")
+                    v_el = ET.SubElement(cell, f"{{{ns}}}v")
                     v_el.text = str(idx)
+                else:
+                    # 官方导出格式（内联字符串）：新行同样用内联写法
+                    cell.set("s", "12")
+                    cell.set("t", "inlineStr")
+                    is_el = ET.SubElement(cell, f"{{{ns}}}is")
+                    t_el = ET.SubElement(is_el, f"{{{ns}}}t")
+                    t_el.text = str(value)
             added_count += 1
             known.add(normalize(title))
         if added_count == 0:
@@ -293,15 +330,19 @@ def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
         import io
 
         sheet_xml = ET.tostring(sheet_root, encoding="utf-8", xml_declaration=True)
-        shared_xml = ET.tostring(shared_root, encoding="utf-8", xml_declaration=True)
         buf = io.BytesIO()
         with zipfile.ZipFile(xlsx_path) as src, zipfile.ZipFile(buf, "w") as dst:
             for item in src.infolist():
                 data_bytes = src.read(item.filename)
                 if item.filename == "xl/worksheets/sheet1.xml":
                     data_bytes = sheet_xml
-                elif item.filename == "xl/sharedStrings.xml":
-                    data_bytes = shared_xml
+                elif (
+                    item.filename == "xl/sharedStrings.xml"
+                    and shared_root is not None
+                ):
+                    data_bytes = ET.tostring(
+                        shared_root, encoding="utf-8", xml_declaration=True
+                    )
                 dst.writestr(item, data_bytes)
         with xlsx_path.open("wb") as fh:
             fh.write(buf.getvalue())

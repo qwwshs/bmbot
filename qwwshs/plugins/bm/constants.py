@@ -91,6 +91,13 @@ def _col_index(ref: str) -> int:
 
 
 def _cell_value(cell: ET.Element, shared: list[str]) -> str | float | None:
+    # 内联字符串（<is><t>…</t></is>，官方导出的 xlsx 常用）优先于共享字符串。
+    # inlineStr 单元格都是文本（数字单元格在文件里用 <v> 存），不做数值转换，
+    # 避免 "Infinity" 这类纯数值字符串被 float() 吞掉。
+    inline = cell.find(f"{{{XLSX_NS}}}is")
+    if inline is not None:
+        text = "".join(t.text or "" for t in inline.iter(f"{{{XLSX_NS}}}t"))
+        return text.strip() or None
     v = cell.find(f"{{{XLSX_NS}}}v")
     if v is None or v.text is None:
         return None
