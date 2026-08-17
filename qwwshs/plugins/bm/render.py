@@ -879,6 +879,21 @@ def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
     return buf.getvalue()
 
 
+# 超过该体积的图片转 JPEG 再发送（全量定数表长图 PNG 可达 20MB+，
+# 协议端可能发送失败或极慢）
+_JPEG_SWITCH_BYTES = 10 * 1024 * 1024
+
+
+def shrink_for_send(img_bytes: bytes) -> bytes:
+    """图片过大时转 JPEG（quality=88，同缩略图惯例），否则原样返回。"""
+    if len(img_bytes) <= _JPEG_SWITCH_BYTES:
+        return img_bytes
+    with Image.open(io.BytesIO(img_bytes)) as im:
+        buf = io.BytesIO()
+        im.convert("RGB").save(buf, "JPEG", quality=88)
+        return buf.getvalue()
+
+
 # ================================================================
 # 帮助图（/bmhelp）
 # ================================================================

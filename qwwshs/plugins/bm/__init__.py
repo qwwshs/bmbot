@@ -69,6 +69,7 @@ from .render import (
     render_chart_table,
     render_help_image,
     render_list_image,
+    shrink_for_send,
 )
 from .song import (
     add_alias,
@@ -122,7 +123,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.7.33"
+BM_VERSION = "0.7.34"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -1574,6 +1575,11 @@ async def handle_charter_pick(event: MessageEvent) -> None:
 # 难度 token -> 难度（大小写不敏感）
 _DIFF_TOKENS = {diff.lower(): diff for diff in ALL_DIFFS}
 _MAX_CONST_ARGS = 2
+# 谱面数超过该值时渲染耗时较长（全量表可达数十秒），先发「生成中」提示
+_CHART_SLOW_THRESHOLD = 300
+# /bmchartlist all 的全量表缓存图（scripts/build-all-charts.py 生成，
+# restart-bot.sh 部署时自动重建；缺失时命令会现场渲染并落盘）
+_ALL_CHARTS_CACHE = DATA_DIR / "all_charts.jpg"
 
 
 def _parse_const_token(token: str) -> tuple[float, float]:
@@ -1610,19 +1616,28 @@ def _parse_chart_args(
     """解析 bmchart/bmrandom 参数 → (定数下限, 定数上限, 难度列表)。
 
     多个定数参数的区间取并集（``11 12`` → ``[11.0, 12.5]``，顺序无关）。
+    ``all`` 表示不限定数区间（可与难度连用，如 ``all TT``）。
     """
     ranges: list[tuple[float, float]] = []
     diffs: list[str] = []
+    has_all = False
     for token in args:
         lower = token.strip().lower()
+        if lower == "all":
+            has_all = True
+            continue
         if lower in _DIFF_TOKENS:
             if _DIFF_TOKENS[lower] not in diffs:
                 diffs.append(_DIFF_TOKENS[lower])
             continue
         ranges.append(_parse_const_token(token))
+    if has_all and ranges:
+        raise ValueError(  # noqa: TRY003
+            "all 表示全部定数，不能与定数区间同时使用"
+        )
     if len(ranges) > _MAX_CONST_ARGS:
         raise ValueError("定数参数最多两个（下限和上限）")
-    if not ranges:
+    if has_all or not ranges:
         return None, None, diffs
     lower = min(r[0] for r in ranges)
     upper = max(r[1] for r in ranges)
@@ -1662,6 +1677,7 @@ async def handle_chart(arg: Message = CommandArg()) -> None:
             "用法：/bmchartlist <定数1> [定数2] [难度...]\n"
             "例如：/bmchartlist 11 12 TT\n/bmchartlist 13+ RU\n"
             "定数：13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
+            "/bmchartlist all 输出全部谱面定数（可加难度，如 all TT）\n"
             "/bmchartlist TT（全部定数）\n不写难度表示全部难度"
         )
     if not SONG_CONSTANTS:
@@ -1673,8 +1689,26 @@ async def handle_chart(arg: Message = CommandArg()) -> None:
     charts = _collect_charts(SONG_CONSTANTS, lower, upper, diffs)
     if not charts:
         await bm_chart.finish("❌ 该范围内没有符合条件的曲目")
+    if lower is None and upper is None and not diffs:
+        # 全量定数表（/bmchartlist all）：渲染慢，优先发磁盘缓存图
+        if _ALL_CHARTS_CACHE.exists():
+            await bm_chart.finish(
+                MessageSegment.image(
+                    await asyncio.to_thread(_ALL_CHARTS_CACHE.read_bytes)
+                )
+            )
+        await bm_chart.send("⏳ 首次生成全量定数表，约需一分钟，请稍候…")
+        img_bytes = await asyncio.to_thread(render_chart_table, charts)
+        img_bytes = await asyncio.to_thread(shrink_for_send, img_bytes)
+        await asyncio.to_thread(_ALL_CHARTS_CACHE.write_bytes, img_bytes)
+        await bm_chart.finish(MessageSegment.image(img_bytes))
+    if len(charts) >= _CHART_SLOW_THRESHOLD:
+        # 全量定数表渲染耗时较长（可达数十秒），先发提示
+        await bm_chart.send("⏳ 生成中，请稍候…")
     img_bytes = await asyncio.to_thread(render_chart_table, charts)
-    await bm_chart.finish(MessageSegment.image(img_bytes))
+    await bm_chart.finish(
+        MessageSegment.image(await asyncio.to_thread(shrink_for_send, img_bytes))
+    )
 
 
 @bm_chart_preview.handle()

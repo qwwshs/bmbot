@@ -180,6 +180,18 @@ git push origin main
 - 注意：`constexcel.xlsx` 可能被 Excel 打开导致写入被锁；脚本会直接覆盖写，
   若仍失败请关闭 Excel 后重试
 
+**全量定数表缓存图（`/bmchartlist all`）**：全量表渲染约一分钟，故落盘为
+`data/bm/all_charts.jpg`（压缩 JPEG），命令直接发缓存图。`restart-bot.sh`
+部署时会自动运行 `scripts/build-all-charts.py` 重建——按定数内容哈希判断，
+**内容变了才重建**，平时部署只多算一次哈希。也可手动运行：
+
+```bash
+python scripts/build-all-charts.py
+```
+
+缓存缺失时（如新机器部署首次启动前），`/bmchartlist all` 会现场渲染并落盘，
+仅第一次慢。`data/` 已 gitignore，缓存不入库。
+
 ### 6.3 人工补录：Info 未收录的曲目
 
 Info 中**没有**的曲目（测试谱、未收录谱、新曲抢先版）不会自动入库。
@@ -285,6 +297,7 @@ ssh admin@101.132.120.132 "cd /home/admin/nbbot/qwwshs && bash scripts/restart-b
 | 曲绘 | `/bmsong 新曲名` | 显示新封面 |
 | 头像 | `/bmrating`（绑定新角色的存档） | 显示新角色头像 |
 | 定数同步日志 | 服务器 `screen -r nb` | 出现「已合并 N 首自动同步的新曲目」 |
+| 全量定数表 | `/bmchartlist all` | 秒回缓存图，新曲已包含在内 |
 
 ## 9. 常见问题
 
