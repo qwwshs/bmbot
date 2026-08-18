@@ -236,8 +236,10 @@ git push origin main
 
 **全量定数表缓存图（`/bmchartlist all`）**：全量表渲染约一分钟，故落盘为
 `data/bm/all_charts.jpg`（压缩 JPEG），命令直接发缓存图。`restart-bot.sh`
-部署时会自动运行 `scripts/build-all-charts.py` 重建——按定数内容哈希判断，
-**内容变了才重建**，平时部署只多算一次哈希。也可手动运行：
+部署时会自动运行 `scripts/build-all-charts.py` 重建——按 **定数内容 + 每张卡
+曲绘的解析结果（文件名与内容哈希）** 计算哈希，**任一变化才重建**（曲绘
+新增/替换也会触发，v0.7.36 修复——此前只对定数做哈希，补曲绘后缓存图仍是
+♪ 占位），平时部署只多算一次哈希。也可手动运行：
 
 ```bash
 python scripts/build-all-charts.py

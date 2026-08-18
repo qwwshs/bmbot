@@ -15,6 +15,7 @@ import random
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -31,6 +32,9 @@ from .rating import (
     target_score_for_cutoff,
     target_score_for_increase,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 CARD_WIDTH = 1080
 PAD = 40
@@ -301,6 +305,20 @@ def _find_image(filename: str) -> Path | None:
     return _image_index.get(filename.lower())
 
 
+def _iter_cover_sources(name: str, diff: str) -> Iterator[Path]:
+    """按 曲名_难度 → 曲名 → 别名变体 依次产出已存在的曲绘源文件。"""
+    for candidate in _cover_candidates(name):
+        for filename in (f"{candidate}_{diff}.png", f"{candidate}.png"):
+            source = _find_image(filename)
+            if source is not None:
+                yield source
+
+
+def resolve_cover(name: str, diff: str) -> Path | None:
+    """解析曲绘源文件路径（不加载图像），供缓存指纹等离线使用。"""
+    return next(_iter_cover_sources(name, diff), None)
+
+
 def load_cover(name: str, diff: str) -> Image.Image | None:
     """按 曲名_难度 → 曲名 → 别名（内部名）→ GS 转义/空白折叠 查找曲绘。"""
     thumb = _thumb_path(name, diff)
@@ -309,20 +327,15 @@ def load_cover(name: str, diff: str) -> Image.Image | None:
             return Image.open(thumb).convert("RGB")
         except OSError:
             pass
-    for candidate in _cover_candidates(name):
-        for filename in (f"{candidate}_{diff}.png", f"{candidate}.png"):
-            source = _find_image(filename)
-            if source is None:
-                continue
-            try:
-                with Image.open(source) as im:
-                    square = _center_crop_square(im.convert("RGB"), THUMB_SIZE)
-                    THUMBS_DIR.mkdir(parents=True, exist_ok=True)
-                    square.save(thumb, "JPEG", quality=88)
-            except OSError:
-                continue
-            else:
-                return square
+    for source in _iter_cover_sources(name, diff):
+        try:
+            with Image.open(source) as im:
+                square = _center_crop_square(im.convert("RGB"), THUMB_SIZE)
+                THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+                square.save(thumb, "JPEG", quality=88)
+        except OSError:
+            continue
+        return square
     return None
 
 

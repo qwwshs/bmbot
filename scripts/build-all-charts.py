@@ -50,8 +50,21 @@ def main() -> int:
         print("✗ 定数表为空，不生成缓存图")
         return 1
 
+    # 曲绘解析结果纳入指纹：每张卡渲染的是曲绘缩略图，只对定数做哈希的话
+    # 新增/替换曲绘不会触发重建（v0.7.36 踩坑——补了 3 张曲绘后缓存图
+    # 仍是 ♪ 占位）。文件名 + 内容哈希，替换同名文件也能感知。
+    cover_parts: list[str] = []
+    for _constant, song, diff in charts:
+        source = render.resolve_cover(song, diff)
+        if source is None:
+            cover_parts.append("-")
+            continue
+        file_hash = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
+        cover_parts.append(f"{source.name}:{file_hash}")
     digest = hashlib.sha256(
-        "\n".join(f"{c:.1f}\t{song}\t{diff}" for c, song, diff in charts).encode()
+        ("\n".join(f"{c:.1f}\t{song}\t{diff}" for c, song, diff in charts)
+         + "\n#covers\n"
+         + "\n".join(cover_parts)).encode()
     ).hexdigest()
     if (
         CACHE_PATH.exists()
