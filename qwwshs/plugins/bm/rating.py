@@ -332,6 +332,7 @@ class Chart:
     score: int
     potential: float
     original_name: str = ""
+    internal_names: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -467,7 +468,12 @@ _N10_WHITELIST = frozenset(normalize_n10_name(name) for name in N10_SONG_LIST)
 
 
 def _normalized_index(constants: dict[str, dict]) -> dict[str, str]:
-    """构建曲名归一化变体 → 表内规范曲名的索引（先到先得）。
+    """构建曲名归一化变体 → 表内规范曲名的索引。
+
+    **别名（游戏内部名）先注册**：存档 BestScore 键是内部名，当一首歌的
+    别名与另一首的显示名归一化后相同（Remix 的内部名 ``Ether Vortex``
+    与原版显示名 ``Ether Vortex``）时，该键必须归属别名所属曲目，否则
+    两首歌的成绩会全部归到显示名曲目（v0.7.37 踩坑）。
 
     变体覆盖大小写、下划线/全角空格、``（RU）`` 后缀、
     简体/繁体/日文汉字的差异，并纳入条目的「原曲名」（中文/日文原名）
@@ -475,27 +481,29 @@ def _normalized_index(constants: dict[str, dict]) -> dict[str, str]:
     """
     index: dict[str, str] = {}
     for name, entry in constants.items():
+        for alias_raw in entry.get("aliases") or []:
+            alias = str(alias_raw).strip()
+            if alias:
+                for variant in normalized_variants(alias):
+                    index.setdefault(variant, name)
+    for name, entry in constants.items():
         for variant in normalized_variants(name):
             index.setdefault(variant, name)
         original = str(entry.get("originalName") or "").strip()
         if original and original != name:
             for variant in normalized_variants(original):
                 index.setdefault(variant, name)
-        for alias_raw in entry.get("aliases") or []:
-            alias = str(alias_raw).strip()
-            if alias and alias != name:
-                for variant in normalized_variants(alias):
-                    index.setdefault(variant, name)
     return index
 
 
 def _resolve_name(
     constants: dict[str, dict], norm_index: dict[str, str], name: str
 ) -> tuple[dict | None, str]:
-    """按曲名查定数表（含归一化变体回退），返回 (条目, 表内规范曲名)。"""
-    entry = constants.get(name)
-    if entry is not None:
-        return entry, name
+    """按曲名查定数表（含归一化变体回退），返回 (条目, 表内规范曲名)。
+
+    不做显示名精确短路：传入的是存档内部名，与某曲显示名相同的情况
+    由别名优先的归一化索引裁决（见 ``_normalized_index``）。
+    """
     for variant in normalized_variants(name):
         canonical = norm_index.get(variant)
         if canonical is not None:
@@ -551,6 +559,11 @@ def parse_scores(
                     score=score,
                     potential=calculate_chart_potential(score, constant),
                     original_name=str(entry.get("originalName") or name),
+                    internal_names=tuple(
+                        str(a).strip()
+                        for a in entry.get("aliases") or []
+                        if str(a).strip()
+                    ),
                 )
             )
     return charts, grade_counts, _dedupe_missing(missing)
@@ -576,8 +589,15 @@ def compute_rating(
     b30_charts = sorted_charts[:30]
     b30_avg = sum(c.potential for c in b30_charts) / 30
 
+    # N10 曲池按内部名（别名）匹配：N10_SONG_LIST 存的是内部名，
+    # 显示名与内部名不同的曲目（Ether Vortex 两首）也能正确入选
     eligible = [
-        c for c in sorted_charts if normalize_n10_name(c.name) in _N10_WHITELIST
+        c
+        for c in sorted_charts
+        if any(
+            normalize_n10_name(n) in _N10_WHITELIST
+            for n in (c.name, *c.internal_names)
+        )
     ]
     eligible.sort(key=lambda c: (-c.potential, -c.constant, -c.score))
     n10_charts = eligible[:10]
