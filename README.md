@@ -10,7 +10,7 @@
 |---|---|
 | `/bmhelp` | 查看帮助 |
 | `/bmbind` | 绑定存档：发送后 5 分钟内发送存档 txt 文件（聊天文件或群文件均可） |
-| `/bmrating` | 以图片输出 Rating 查分（B30 + N10 + OVERFLOW + GOAL 推分目标） |
+| `/bmrating [QQ号]` | 以图片输出 Rating 查分（B30 + N10 + OVERFLOW + GOAL 推分目标）；带 QQ 号可查指定玩家（仅超管） |
 | `/bmratingstyle` | 切换查分样式（新版网格卡 / 旧版榜单，按用户保存） |
 | `/bmsong <曲名>` | 单曲查询（支持中/日/英文模糊搜索，多结果回复序号） |
 | `/bmaddname <别名>` | 为歌曲添加自定义别名（白名单） |

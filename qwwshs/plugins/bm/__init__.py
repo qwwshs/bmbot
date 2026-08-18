@@ -90,7 +90,10 @@ if TYPE_CHECKING:
 __plugin_meta__ = PluginMetadata(
     name="Berry Melody 查分",
     description="Berry Melody 音游查分：绑定 txt 存档 / 查分图 / 单曲查询",
-    usage="/bmhelp\n/bmbind\n/bmexport\n/bmrating\n/bmsong <曲名>",
+    usage=(
+        "/bmhelp\n/bmbind\n/bmexport\n"
+        "/bmrating [QQ号]（超管可查他人）\n/bmsong <曲名>"
+    ),
 )
 
 
@@ -123,7 +126,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.7.39"
+BM_VERSION = "0.7.40"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -844,25 +847,16 @@ async def _revoke_group_file(bot: Bot, event: GroupUploadNoticeEvent) -> None:
         logger.error(f"删除群文件失败: {exc}")
 
 
-@bm_rating.handle()
-async def handle_rating(event: MessageEvent) -> None:
-    qq = str(event.user_id)
-    binding = _bindings.get(qq)
-    if binding is None:
-        await bm_rating.finish(
-            "❌ 你还没有绑定存档\n请先发送 /bmbind 并发送存档 txt 文件"
-        )
-    if not SONG_CONSTANTS:
-        await bm_rating.finish("❌ 定数表未加载，无法查分")
-    data = binding["data"]
+async def _render_rating_image(qq: str, data: dict) -> tuple[bytes, str]:
+    """按绑定存档渲染查分图，返回 (图片字节, 未收录提示文本)。"""
     charts, grade_counts, missing = parse_scores(data, SONG_CONSTANTS)
     if not charts:
-        await bm_rating.finish("❌ 存档中没有可计算的成绩（可能绑定了错误的存档）")
+        raise ValueError("存档中没有可计算的成绩（可能绑定了错误的存档）")
     result = compute_rating(charts, data.get("Potential"))
     result.missing = missing
+    binding = _bindings.get(qq) or {}
     player_name = binding.get("name") or str(data.get("AccountName") or "未知玩家")
     style = _rating_styles.get(qq, "new")
-    await bm_rating.send("⏳ 生成中，请稍候…")
     if style == "old":
         img_bytes = await asyncio.to_thread(
             render_card, player_name, result, grade_counts, data.get("Potential")
@@ -878,10 +872,47 @@ async def handle_rating(event: MessageEvent) -> None:
             data.get("Glass"),
             data.get("Quantum"),
         )
-    message: Message = MessageSegment.image(img_bytes)
-    if missing:
-        message += f"\n⚠️ 有 {len(missing)} 首成绩未在定数表中，不计入"
-    await bm_rating.finish(message)
+    note = f"\n⚠️ 有 {len(missing)} 首成绩未在定数表中，不计入" if missing else ""
+    return img_bytes, note
+
+
+@bm_rating.handle()
+async def handle_rating(event: MessageEvent, arg: Message = CommandArg()) -> None:
+    query = arg.extract_plain_text().strip()
+    # 超管查询他人：/bmrating <QQ号>
+    if query:
+        if event.user_id != bm_config.bm_super_admin_qq:
+            await bm_rating.finish("❌ 查询他人查分卡仅限超管使用")
+        if not query.isdigit():
+            await bm_rating.finish("用法：/bmrating [QQ号]（超管可查询指定玩家）")
+        target = _bindings.get(query)
+        if target is None:
+            await bm_rating.finish(f"❌ QQ {query} 没有绑定存档")
+        if not SONG_CONSTANTS:
+            await bm_rating.finish("❌ 定数表未加载，无法查分")
+        data = target["data"]
+        await bm_rating.send(f"⏳ 正在生成 QQ {query} 的查分卡，请稍候…")
+        try:
+            img_bytes, note = await _render_rating_image(query, data)
+        except ValueError as exc:
+            await bm_rating.finish(f"❌ QQ {query} 的{exc}")
+        await bm_rating.finish(MessageSegment.image(img_bytes) + note)
+    # 普通自查
+    qq = str(event.user_id)
+    binding = _bindings.get(qq)
+    if binding is None:
+        await bm_rating.finish(
+            "❌ 你还没有绑定存档\n请先发送 /bmbind 并发送存档 txt 文件"
+        )
+    if not SONG_CONSTANTS:
+        await bm_rating.finish("❌ 定数表未加载，无法查分")
+    data = binding["data"]
+    await bm_rating.send("⏳ 生成中，请稍候…")
+    try:
+        img_bytes, note = await _render_rating_image(qq, data)
+    except ValueError as exc:
+        await bm_rating.finish(f"❌ {exc}")
+    await bm_rating.finish(MessageSegment.image(img_bytes) + note)
 
 
 async def _send_song_detail(matcher: Matcher, qq: str, name: str) -> None:
