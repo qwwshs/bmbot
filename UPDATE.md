@@ -149,9 +149,17 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
 - **不用管的曲目（check-covers 报缺失属预期）**：
   - **游戏已下架（曲绘已删，勿再补充）**：`Varcolac`、`始め恋`（lian）、
     `MIRЯOЯ`（MIRROR）
-  - **当前 APK 无曲绘源（章节曲包表/未发布曲目，需人工从游戏截图补充）**：
-    `終わりの少女 feat. こにゃばた (full)`、`小登厨`（small DENG kitchen）、
-    `蜜糖色的回响`（The Echo of Peach Color）
+- **新版 APK 曲绘提取（resources.assets 通道，v0.7.35 踩坑）**：新版把部分
+  新曲目从 Addressables bundle 挪进了 `assets/bin/Data/data.unity3d` 的
+  `resources.assets`（catalog.json 里路径**无** `Assets/Resources_moved/`
+  前缀即属此类），AssetStudio 按容器提取导出 0 个。此时曲绘藏在该文件的
+  一批**匿名同名 `Header`**（2048×1536）纹理里，路径→纹理映射表在
+  `globalgamemanagers` 的 **ResourceManager** 对象（path_id=13）：平铺
+  `[路径长度][小写资源路径][按 4 字节对齐][PPtr(fileID=5 → resources.assets,
+  pathID)]` 条目。用 UnityPy 读出 PPtr 后按 path_id 提取纹理即可。已用此法
+  补齐 `小登厨`（small DENG kitchen）、`蜜糖色的回响`（The Echo of Peach
+  Color）、`終わりの少女 feat. こにゃばた (full)`（The End Girl，内部名已
+  作为别名写入定数表 xlsx P 列）。
 - 上传：
 
   ```bash

@@ -32,9 +32,6 @@ EXPECTED_MISSING = {
     "Varcolac",
     "始め恋",
     "MIRЯOЯ",
-    "終わりの少女\nfeat. こにゃばた (full)",
-    "小登厨",
-    "蜜糖色的回响",
 }
 
 _EXPECTED_MISSING_NFC = {unicodedata.normalize("NFC", n) for n in EXPECTED_MISSING}
