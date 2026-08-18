@@ -23,14 +23,15 @@
 | 路径 | 说明 |
 | --- | --- |
 | `E:\nb\test\Berry Melody.apk` | **最新版游戏 APK**（每次更新放这里） |
-| `E:\nb\test\Berry Melody\` | **解包基础目录**（人工维护，含 `ass\` 解包产物与源文件） |
+| `E:\nb\test\apk_x\` | **当前版解包目录**（3.3.4，人工维护）：<br>`assets\aa\Android\defaultlocalgroup_*.bundle` = Addressables 资源包<br>`assets\bin\Data\data.unity3d` = Resources/场景打包（部分新曲在此） |
+| `E:\nb\test\Berry Melody\` | **旧版解包目录**（3.3.3 及更早，仅作历史参考/查旧素材） |
 | `E:\nb\test\AssetStudio-net10.0-win\` | AssetStudio 工具（CLI + GUI，从 `F:\AssetStudio-net10.0-win.zip` 解压） |
 | `F:\AssetStudio-net10.0-win.zip` | AssetStudio 工具压缩包备份 |
 | `E:\nb\test\qwwshs\` | bot 仓库（推送到 GitHub，服务器拉取部署） |
 
 服务器目录：`/home/admin/nbbot/qwwshs/`（git 仓库 + `data/` 运行时数据）。
 
-**解包产物结构**（`Berry Melody\ass\`）：
+**解包产物结构**（`<解包目录>\ass\`，当前为 `apk_x\ass\`）：
 
 ```
 ass\
@@ -43,22 +44,24 @@ ass\
 
 ## 2. 解包新 APK（AssetStudio.CLI）
 
-新 APK 放到 `E:\nb\test\Berry Melody.apk` 后，用 CLI 直接解包（无需先解压 APK）：
+新 APK 放到 `E:\nb\test\Berry Melody.apk` 后，用 CLI 直接解包（无需先解压 APK）。
+**每次新版本建议解到全新目录**（如 `apk_y\`），不要混入旧目录——同名文件
+会互相覆盖，且旧版残留会干扰判断（`Berry Melody\ass\` 就是旧版残留的教训）：
 
 ```bat
 cd /d E:\nb\test\AssetStudio-net10.0-win
 
 :: 谱面文本（TextAsset，含 Info）
-AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" --game Normal --types TextAsset
+AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\apk_x\ass" --game Normal --types TextAsset
 
 :: 精灵图（note 皮肤素材）
-AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" --game Normal --types "Sprite:Both"
+AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\apk_x\ass" --game Normal --types "Sprite:Both"
 
 :: 纹理（歌曲封面 / 角色头像）
-AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" --game Normal --types Texture2D
+AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\apk_x\ass" --game Normal --types Texture2D
 ```
 
-- 输出目录直接指向 `Berry Melody\ass\`，CLI 会按类型建子文件夹
+- 输出目录指向解包目录（如 `apk_x\ass\`），CLI 会按类型建子文件夹
 - **重复运行自动跳过已存在文件**（"files already exist"），可增量更新
 - 解包耗时约 1-5 分钟（APK 约 1.7GB，可挂后台跑）
 - 如需要其他类型（Font/AudioClip 等）：`--types "Font:Both|AudioClip"`，`--game Normal` 不变
@@ -84,7 +87,7 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
 
 ## 4. 皮肤素材更新流程
 
-1. **本地**：从 `Berry Melody\ass\Sprite\` 复制新皮肤素材到 `qwwshs\plugins\bm\note\`。
+1. **本地**：从 `apk_x\ass\Sprite\` 复制新皮肤素材到 `qwwshs\plugins\bm\note\`。
    - 同名纹理多皮肤共用时需按 `ass\Material\*.json` 的 `_MainTex` PathID 从
      `data.unity3d` 提取对应版本（参考 `Phi_Tap.png` / `flick2.png` 的提取过程）。
 2. **上传服务器**：
@@ -100,7 +103,8 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
 
 ## 5. 曲绘与玩家头像更新
 
-两个都来自 `Berry Melody\ass\Texture2D\`，输出到 `qwwshs\plugins\bm\images\`（gitignore）。
+两个都来自解包目录的 `ass\Texture2D\`（当前为 `apk_x\ass\Texture2D\`），
+输出到 `qwwshs\plugins\bm\images\`（gitignore）。
 
 ### 5.1 曲绘（歌曲封面）
 
@@ -112,7 +116,7 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
   ```bash
   cd /d E:\nb\test\AssetStudio-net10.0-win
   # 容器路径查 assets/aa/catalog.json（搜曲名）
-  AssetStudio.CLI.exe "E:\nb\test\Berry Melody\assets\aa\Android\defaultlocalgroup_assets_all_0d65a21c70a7587b3e13734f4f1e101a.bundle" "E:\nb\test\Berry Melody\ass_song\<曲名>" --game Normal --types Texture2D --containers "SongPackage/Single/<曲名>"
+  AssetStudio.CLI.exe "E:\nb\test\apk_x\assets\aa\Android\defaultlocalgroup_assets_all_<哈希>.bundle" "E:\nb\test\apk_song_x\<曲名>" --game Normal --types Texture2D --containers "SongPackage/Single/<曲名>"
   # 取 Header.png（分难度版 Header_TT/DM/RU 也一并取出），转 RGB 存 images\<内部名>.png
   ```
 
@@ -160,11 +164,16 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\Berry Melody\ass" 
   补齐 `小登厨`（small DENG kitchen）、`蜜糖色的回响`（The Echo of Peach
   Color）、`終わりの少女 feat. こにゃばた (full)`（The End Girl，内部名已
   作为别名写入定数表 xlsx P 列）。
-- 上传：
+- 上传（本机无 rsync 时逐个 scp，务必 md5 校验）：
 
   ```bash
+  # rsync（若可用）
   rsync -av "E:/nb/test/qwwshs/qwwshs/plugins/bm/images/" admin@101.132.120.132:/home/admin/nbbot/qwwshs/qwwshs/plugins/bm/images/
+  # 或 scp
+  scp "E:/nb/test/qwwshs/qwwshs/plugins/bm/images/曲名.png" admin@101.132.120.132:/home/admin/nbbot/qwwshs/qwwshs/plugins/bm/images/
   ```
+- 上传后清理该曲的缩略图缓存（键为 `md5(曲名|难度)[:16]_难度.jpg`，
+  位于 `data/bm/thumbs/`，本地与服务器都要清）并重启 bot。
 
 ### 5.2 玩家头像（角色头像）
 
