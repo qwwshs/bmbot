@@ -1101,25 +1101,37 @@ def _locate_chart(
 
 
 def _song_file_names(song: str) -> list[str]:
-    """谱面文件名候选：表内曲名 + 原曲名 + 别名（谱面文件按游戏内部名命名）。"""
+    """谱面文件名候选：别名（内部名）优先 + 表内曲名 + 原曲名。
+
+    谱面文件按游戏内部名命名。当一首歌的内部名与另一首的显示名相同
+    （原版内部名 ``Ether Vortex Final``/显示名 ``Ether Vortex``，Remix 正相反）
+    时，必须先试内部名，否则原版会命中 Remix 的谱面文件（v0.7.39 踩坑）。
+    """
     entry = get_song_constants().get(song) or {}
-    candidates = [song]
+    candidates = [
+        str(alias_raw).strip()
+        for alias_raw in entry.get("aliases") or []
+        if str(alias_raw).strip()
+    ]
+    if song not in candidates:
+        candidates.append(song)
     original = str(entry.get("originalName") or "").strip()
     if original and original not in candidates:
         candidates.append(original)
-    for alias_raw in entry.get("aliases") or []:
-        alias = str(alias_raw).strip()
-        if alias and alias not in candidates:
-            candidates.append(alias)
     return candidates
 
 
 def _chart_file(song: str, diff: str) -> tuple[Path, str] | None:
-    """查找 ``chart/<曲名> <难度>[.txt]``，直接路径优先，索引（小写）兜底。"""
-    for suffix in ("", ".txt"):
-        direct = CHART_DIR / f"{song} {diff}{suffix}"
-        if direct.exists():
-            return direct, diff
+    """查找 ``chart/<曲名> <难度>[.txt]``，直接路径优先，索引（小写）兜底。
+
+    直接路径也按候选顺序（内部名优先）逐个试：直接用表内名会先撞上
+    内部名与它同名的另一首歌的谱面文件（Ether Vortex 踩坑）。
+    """
+    for candidate in _song_file_names(song):
+        for suffix in ("", ".txt"):
+            direct = CHART_DIR / f"{candidate} {diff}{suffix}"
+            if direct.exists():
+                return direct, diff
     index = _chart_index()
     names: list[str] = []
     for candidate in _song_file_names(song):
