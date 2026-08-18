@@ -179,13 +179,21 @@ AssetStudio.CLI.exe "E:\nb\test\Berry Melody.apk" "E:\nb\test\apk_x\ass" --game 
 
 - 来源：`ass\Texture2D\<角色EName>.png`（**98×98 小头像**，如 `Elodea.png`、`Ayira.png`；
   另有 `Default Head.png` 为默认头像）
-- 处理：把 98×98 源图放大/锐化为 **150×150**，存为 `images\<角色EName>.png`
+- **新版 APK 注意**：角色头像和曲绘一样被挪进了 `data.unity3d` 的
+  `resources.assets`（bundle 里 `Characters/<名>/Default Head` 容器提取为空）。
+  用 5.1 的 **ResourceManager 路径表**通道提取：扫 `characters/<名>/default head`
+  路径得到 PPtr，取**第一组（较小）pid** 是 150×150 头像 Texture2D（另一组
+  pid 是 Sprite）。源图直接就是 150×150，无需放大（xbeed 踩坑补齐）。
+- 处理：98×98 源图放大/锐化为 **150×150** 后存为 `images\<角色EName>.png`
+  （ResourceManager 通道的 150×150 直接存）
 - **角色名映射**：存档里的角色 Path 与头像文件名不一致时，在
   `qwwshs/plugins/bm/render.py` 的 `CHAR_AVATAR_FILES` 里补映射
   （如存档 `Elidia` → 头像文件 `Elodea.png`；新角色直接同名则无需映射）
 - 新角色检查点：
   1. 新 APK 解包后 `Texture2D\` 里出现的新 `<EName>.png`
   2. 存档新增的角色 Path 是否在 `CHAR_AVATAR_FILES` 或 `images\` 中有对应文件
+     （排查方法：扫服务器 `data/bm/bindings/*.json` 的 `CharSelect` 值分布，
+     对照 images/ 与 CHAR_AVATAR_FILES 找缺口）
   3. 头像上传后重启 bot（`_avatar_cache` 有缓存，重启后生效）
 - 上传：
 
