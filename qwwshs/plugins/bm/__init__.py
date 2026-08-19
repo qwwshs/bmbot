@@ -1235,10 +1235,19 @@ async def handle_name_list(event: MessageEvent) -> None:
 def _resolve_n10_entry(
     internal: str,
 ) -> tuple[str, dict] | None:
-    """通过内部名（别名）在定数表中查找 N10 曲目，返回 (显示名, 条目)。"""
+    """通过内部名在定数表中查找 N10 曲目（别名 → 显示名 → 原曲名）。"""
+    norm = normalize_n10_name(internal)
+    # 精确别名匹配
     for name, entry in SONG_CONSTANTS.items():
         aliases = entry.get("aliases") or []
         if internal in aliases:
+            return name, entry
+    # 归一化匹配（显示名 / 原曲名）
+    for name, entry in SONG_CONSTANTS.items():
+        if normalize_n10_name(name) == norm:
+            return name, entry
+        original = str(entry.get("originalName") or "").strip()
+        if original and normalize_n10_name(original) == norm:
             return name, entry
     return None
 
