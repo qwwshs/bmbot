@@ -1840,6 +1840,24 @@ async def _handle_chart_score(
 @bm_chart.handle()
 async def handle_chart(event: MessageEvent, arg: Message = CommandArg()) -> None:
     """按定数区间/难度生成定数表图（/bmchartlist）。"""
+    try:
+        return await _handle_chart_impl(event, arg)
+    except Exception as exc:
+        from nonebot.exception import MatcherException
+        if isinstance(exc, MatcherException):
+            raise
+        import traceback as _tb
+        _log_path = DATA_DIR / "bmchartlist_error.log"
+        _log_path.write_text(
+            f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            + "".join(_tb.format_exception(type(exc), exc, exc.__traceback__)),
+            encoding="utf-8",
+        )
+        logger.error(f"bmchartlist error: {exc}")
+        await bm_chart.finish(f"❌ bmchartlist 出错: {exc}")
+
+
+async def _handle_chart_impl(event: MessageEvent, arg: Message) -> None:
     args = arg.extract_plain_text().split()
     if not args:
         await bm_chart.finish(
