@@ -1817,7 +1817,6 @@ async def _handle_chart_score(
         )
     if not rated:
         await bm_chart.finish("❌ 该范围内没有你打过的谱面")
-    rated.sort(key=lambda c: c.potential, reverse=True)
     img_bytes = await asyncio.to_thread(render_score_grid, rated)
     await bm_chart.finish(
         MessageSegment.image(
