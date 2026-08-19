@@ -466,6 +466,12 @@ def normalize_n10_name(name: str) -> str:
 # N10 固定曲池白名单（曲名归一化后的小写形式）
 _N10_WHITELIST = frozenset(normalize_n10_name(name) for name in N10_SONG_LIST)
 
+# 已下架曲目（游戏内已删除，不计入 Rating）
+_DELETED_SONGS: frozenset[str] = frozenset({
+    normalize_n10_name(name)
+    for name in ("Varcolac", "MIRЯOЯ", "MIRROR", "始め恋", "lian")
+})
+
 
 def _normalized_index(constants: dict[str, dict]) -> dict[str, str]:
     """构建曲名归一化变体 → 表内规范曲名的索引。
@@ -544,6 +550,9 @@ def parse_scores(
         if diff in ALL_DIFFS:
             grade_counts[diff][grade] += 1
         entry, name = _resolve_name(constants, norm_index, name)
+        # 跳过已下架曲目
+        if normalize_n10_name(name) in _DELETED_SONGS:
+            continue
         if diff not in ALL_DIFFS or entry is None:
             if diff in ALL_DIFFS:
                 missing.append(f"{name} ({diff})")
