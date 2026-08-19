@@ -1254,28 +1254,31 @@ def _resolve_n10_entry(
 
 @bm_n10.handle()
 async def handle_n10() -> None:
-    """输出 N10 固定曲池（20 首）及定数。"""
+    """输出 N10 固定曲池（20 首）及定数，使用 bmchartlist 同款卡片排版。"""
     if not SONG_CONSTANTS:
         await bm_n10.finish("❌ 定数表未加载")
-    lines = ["🎵 N10 固定曲池（20 首）", "━━━━━━━━━━━━━━━━━━"]
-    found = 0
+    charts: list[tuple[float, str, str]] = []
+    missing_names: list[str] = []
     for internal in N10_SONG_LIST:
         resolved = _resolve_n10_entry(internal)
         if resolved is None:
-            lines.append(f"❓ {internal}（未在定数表中）")
+            missing_names.append(internal)
             continue
-        display, entry = resolved
-        found += 1
-        consts: list[str] = []
-        for diff in ("RL", "IL", "TT", "RU", "DM", "FL"):
-            val = entry.get(diff)
-            if val is not None:
-                consts.append(f"{diff} {val}")
-        lines.append(f"{display}  {'  '.join(consts)}")
-    lines.append("━━━━━━━━━━━━━━━━━━")
-    lines.append(f"共 {found}/{len(N10_SONG_LIST)} 首已收录")
-    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
-    await bm_n10.finish(MessageSegment.image(img_bytes))
+        _display, entry = resolved
+        for diff in ALL_DIFFS:
+            constant = entry.get(diff)
+            if constant is None or float(constant) <= 0:
+                continue
+            charts.append((float(constant), _display, diff))
+    if not charts:
+        await bm_n10.finish("❌ N10 曲池内无已收录定数")
+    charts.sort(key=lambda item: (-item[0], item[1], item[2]))
+    img_bytes = await asyncio.to_thread(render_chart_table, charts)
+    img_bytes = await asyncio.to_thread(shrink_for_send, img_bytes)
+    note = ""
+    if missing_names:
+        note = f"\n⚠️ 未在定数表中：{'，'.join(missing_names)}"
+    await bm_n10.finish(MessageSegment.image(img_bytes) + note)
 
 
 # 谱师查询与管理（bmcharter / 基元谱师名义）
