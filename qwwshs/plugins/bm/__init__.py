@@ -64,6 +64,7 @@ from .decrypt import (
 )
 from .rating import (
     ALL_DIFFS,
+    N10_SONG_LIST,
     Chart,
     calculate_chart_potential,
     compute_rating,
@@ -100,7 +101,7 @@ __plugin_meta__ = PluginMetadata(
     description="Berry Melody 音游查分：绑定 txt 存档 / 查分图 / 单曲查询",
     usage=(
         "/bmhelp\n/bmbind\n/bmexport\n"
-        "/bmrating [QQ号]（超管可查他人）\n/bmsong <曲名>"
+        "/bmrating [QQ号]（超管可查他人）\n/bmsong <曲名>\n/bmn10"
     ),
 )
 
@@ -134,7 +135,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.8.0"
+BM_VERSION = "0.8.1"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -505,6 +506,7 @@ bm_chart_preview = on_command("bmchart", priority=5, block=True)
 bm_skin = on_command("bmskin", priority=5, block=True)
 bm_skin_pick = on_message(priority=10, block=False)
 bm_random = on_command("bmrandom", priority=5, block=True)
+bm_n10 = on_command("bmn10", priority=5, block=True)
 bm_rating_style = on_command("bmratingstyle", priority=5, block=True)
 bm_file_watch = on_message(priority=10, block=False)
 bm_song_pick = on_message(priority=10, block=False)
@@ -556,9 +558,10 @@ _HELP_TEXT = (
     "   13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
     "   末尾加 score 启用成绩渲染模式（需绑定存档）\n"
     "/bmrandom <定数1> [定数2] [难度...] — 在定数区间内随机挑一首曲目\n"
-    "/bmchart <曲名> — 谱面预览图（先选曲目再选难度）\n"
-    "/bmskin — 切换谱面预览的音符皮肤\n"
-    "/bmbotversion — 查看 bot 版本\n"
+"/bmchart <曲名> — 谱面预览图（先选曲目再选难度）\n"
+"/bmn10 — 查看 N10 固定曲池（20 首）\n"
+"/bmskin — 切换谱面预览的音符皮肤\n"
+"/bmbotversion — 查看 bot 版本\n"
     "━━━━━━━━━━━━━━━━━━\n"
     "📱 存档位置：/Android/data/com.skywaystudio.BerryMelody/files/FormalSave.txt"
 )
@@ -1227,6 +1230,43 @@ async def handle_name_list(event: MessageEvent) -> None:
         lines.append(f"{display} <- {'，'.join(sorted(by_song[name]))}")
     img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
     await bm_name_list.finish(MessageSegment.image(img_bytes))
+
+
+def _resolve_n10_entry(
+    internal: str,
+) -> tuple[str, dict] | None:
+    """通过内部名（别名）在定数表中查找 N10 曲目，返回 (显示名, 条目)。"""
+    for name, entry in SONG_CONSTANTS.items():
+        aliases = entry.get("aliases") or []
+        if internal in aliases:
+            return name, entry
+    return None
+
+
+@bm_n10.handle()
+async def handle_n10() -> None:
+    """输出 N10 固定曲池（20 首）及定数。"""
+    if not SONG_CONSTANTS:
+        await bm_n10.finish("❌ 定数表未加载")
+    lines = ["🎵 N10 固定曲池（20 首）", "━━━━━━━━━━━━━━━━━━"]
+    found = 0
+    for internal in N10_SONG_LIST:
+        resolved = _resolve_n10_entry(internal)
+        if resolved is None:
+            lines.append(f"❓ {internal}（未在定数表中）")
+            continue
+        display, entry = resolved
+        found += 1
+        consts: list[str] = []
+        for diff in ("RL", "IL", "TT", "RU", "DM", "FL"):
+            val = entry.get(diff)
+            if val is not None:
+                consts.append(f"{diff} {val}")
+        lines.append(f"{display}  {'  '.join(consts)}")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append(f"共 {found}/{len(N10_SONG_LIST)} 首已收录")
+    img_bytes = await asyncio.to_thread(render_list_image, "\n".join(lines))
+    await bm_n10.finish(MessageSegment.image(img_bytes))
 
 
 # 谱师查询与管理（bmcharter / 基元谱师名义）
