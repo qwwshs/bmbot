@@ -909,6 +909,53 @@ def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
     return buf.getvalue()
 
 
+def render_score_grid(charts: list[Chart], score: int) -> bytes:
+    """用 bmrating 同款 CARD2 卡片渲染定数表（模拟分数模式）。"""
+    card_w = CARD2_PLATE_W
+    width = CARD2_PER_ROW * card_w + (CARD2_PER_ROW - 1) * CARD2_GAP + 2 * CARD2_PAD
+    title_h = 60
+    grid_rows = (len(charts) + CARD2_PER_ROW - 1) // CARD2_PER_ROW
+    grid_h = grid_rows * (CARD2_PLATE_H + CARD2_GAP) - CARD2_GAP
+    height = CARD2_PAD + title_h + 16 + grid_h + CARD2_PAD
+
+    img = Image.new("RGB", (width, height), CARD2_BG)
+    draw = ImageDraw.Draw(img)
+
+    # 随机背景
+    bg = _random_bg()
+    if bg is not None:
+        scale = max(width / bg.width, height / bg.height)
+        new_w = max(1, round(bg.width * scale))
+        new_h = max(1, round(bg.height * scale))
+        bg = bg.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        left = (new_w - width) // 2
+        top_off = (new_h - height) // 2
+        bg = bg.crop((left, top_off, left + width, top_off + height))
+        img.paste(bg, (0, 0), bg)
+
+    # 标题行：模拟分数 + 曲目数
+    draw.text(
+        (width // 2, CARD2_PAD),
+        f"模拟分数 {score}  ·  {len(charts)} 首谱面",
+        font=_font(28, bold=True),
+        fill=CARD2_TEXT,
+        anchor="ma",
+    )
+
+    # 卡片网格
+    y = CARD2_PAD + title_h + 16
+    for index, chart in enumerate(charts):
+        col = index % CARD2_PER_ROW
+        row = index // CARD2_PER_ROW
+        cx = CARD2_PAD + col * (card_w + CARD2_GAP)
+        cy = y + row * (CARD2_PLATE_H + CARD2_GAP)
+        _draw_rating_card_new(img, draw, cx, cy, chart, None)
+
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
 # 超过该体积的图片转 JPEG 再发送（全量定数表长图 PNG 可达 20MB+，
 # 协议端可能发送失败或极慢）
 _JPEG_SWITCH_BYTES = 10 * 1024 * 1024
