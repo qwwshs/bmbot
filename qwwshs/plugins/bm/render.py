@@ -909,8 +909,8 @@ def render_chart_table(charts: list[tuple[float, str, str]]) -> bytes:
     return buf.getvalue()
 
 
-def render_score_grid(charts: list[Chart], score: int) -> bytes:
-    """用 bmrating 同款 CARD2 卡片渲染定数表（模拟分数模式）。"""
+def render_score_grid(charts: list[Chart]) -> bytes:
+    """用 bmrating 同款 CARD2 卡片渲染定数表（成绩模式）。"""
     card_w = CARD2_PLATE_W
     width = CARD2_PER_ROW * card_w + (CARD2_PER_ROW - 1) * CARD2_GAP + 2 * CARD2_PAD
     title_h = 60
@@ -933,10 +933,16 @@ def render_score_grid(charts: list[Chart], score: int) -> bytes:
         bg = bg.crop((left, top_off, left + width, top_off + height))
         img.paste(bg, (0, 0), bg)
 
-    # 标题行：模拟分数 + 曲目数
+    # 标题行：曲目数 + 潜力范围
+    if charts:
+        lo = f"{charts[-1].potential:.2f}"
+        hi = f"{charts[0].potential:.2f}"
+        subtitle = f"  ·  potential {lo} ~ {hi}"
+    else:
+        subtitle = ""
     draw.text(
         (width // 2, CARD2_PAD),
-        f"模拟分数 {score}  ·  {len(charts)} 首谱面",
+        f"{len(charts)} 首谱面{subtitle}",
         font=_font(28, bold=True),
         fill=CARD2_TEXT,
         anchor="ma",

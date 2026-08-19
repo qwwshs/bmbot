@@ -15,7 +15,6 @@ import asyncio
 import base64
 import json
 import random
-import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -555,7 +554,7 @@ _HELP_TEXT = (
     "/bmrelatedcharterlist — 查看全部谱师关联（白名单）\n"
     "/bmchartlist <定数1> [定数2] [难度...] [分数] — 按定数区间生成定数表图\n"
     "   13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
-    "   末尾加分数（如 990000）可切换为 bmrating 卡片样式\n"
+    "   末尾加 score 启用成绩渲染模式（需绑定存档）\n"
     "/bmrandom <定数1> [定数2] [难度...] — 在定数区间内随机挑一首曲目\n"
     "/bmchart <曲名> — 谱面预览图（先选曲目再选难度）\n"
     "/bmskin — 切换谱面预览的音符皮肤\n"
@@ -1616,7 +1615,6 @@ async def handle_charter_pick(event: MessageEvent) -> None:
 # 难度 token -> 难度（大小写不敏感）
 _DIFF_TOKENS = {diff.lower(): diff for diff in ALL_DIFFS}
 _MAX_CONST_ARGS = 2
-_SCORE_RE = re.compile(r"^\d{6,}$")
 # 谱面数超过该值时渲染耗时较长（全量表可达数十秒），先发「生成中」提示
 _CHART_SLOW_THRESHOLD = 300
 # /bmchartlist all 的全量表缓存图（scripts/build-all-charts.py 生成，
@@ -1652,36 +1650,63 @@ def _parse_const_token(token: str) -> tuple[float, float]:
     return value, value + 0.5
 
 
+def _score_from_archive(
+    data: dict,
+    song: str,
+    diff: str,
+    entry: dict,
+) -> int:
+    """从存档中取指定谱面的分数（0 = 未找到）。
+
+    存档键用游戏内部名，与表内曲名（显示名）可能不同，
+    依次尝试 别名 → 曲名 → 原曲名 的归一化形式。
+    """
+    candidates = [str(a).strip() for a in entry.get("aliases") or []]
+    candidates.append(song)
+    original = str(entry.get("originalName") or "").strip()
+    if original and original not in candidates:
+        candidates.append(original)
+    wanted = {normalize_n10_name(c) for c in candidates if c}
+    prefix = "BestScore_"
+    for key, value in data.items():
+        if not key.startswith(prefix):
+            continue
+        parts = key.split("_")
+        if len(parts) < 3 or parts[-1] != diff:  # noqa: PLR2004
+            continue
+        name = normalize_n10_name("_".join(parts[1:-1]))
+        if name in wanted:
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                pass
+    return 0
+
+
 def _parse_chart_args(
     args: list[str],
-) -> tuple[float | None, float | None, list[str], int | None]:
-    """解析 bmchart/bmrandom 参数 → (定数下限, 定数上限, 难度列表, 模拟分数)。
+) -> tuple[float | None, float | None, list[str], bool]:
+    """解析 bmchart/bmrandom 参数 → (定数下限, 定数上限, 难度列表, 是否显示成绩)。
 
     多个定数参数的区间取并集（``11 12`` → ``[11.0, 12.5]``，顺序无关）。
     ``all`` 表示不限定数区间（可与难度连用，如 ``all TT``）。
-    末尾的 6+ 位纯数字视为模拟分数（``990000``），启用 bmrating 卡片样式。
+    末尾输入 ``score`` 启用成绩渲染模式（需先绑定存档）。
     """
     ranges: list[tuple[float, float]] = []
     diffs: list[str] = []
     has_all = False
-    score: int | None = None
+    show_score = False
     for token in args:
-        stripped = token.strip()
-        lower = stripped.lower()
+        lower = token.strip().lower()
         if lower == "all":
             has_all = True
+            continue
+        if lower == "score":
+            show_score = True
             continue
         if lower in _DIFF_TOKENS:
             if _DIFF_TOKENS[lower] not in diffs:
                 diffs.append(_DIFF_TOKENS[lower])
-            continue
-        if _SCORE_RE.match(stripped):
-            value = int(stripped)
-            if value < 0 or value > 1_000_000:  # noqa: PLR2004
-                raise ValueError(  # noqa: TRY003
-                    f"分数必须在 0~1000000 之间：{value}"
-                )
-            score = value
             continue
         ranges.append(_parse_const_token(token))
     if has_all and ranges:
@@ -1691,10 +1716,10 @@ def _parse_chart_args(
     if len(ranges) > _MAX_CONST_ARGS:
         raise ValueError("定数参数最多两个（下限和上限）")
     if has_all or not ranges:
-        return None, None, diffs, score
+        return None, None, diffs, show_score
     lower = min(r[0] for r in ranges)
     upper = max(r[1] for r in ranges)
-    return lower, upper, diffs, score
+    return lower, upper, diffs, show_score
 
 
 def _collect_charts(
@@ -1721,8 +1746,48 @@ def _collect_charts(
     return charts
 
 
+async def _handle_chart_score(
+    event: MessageEvent,
+    charts: list[tuple[float, str, str]],
+) -> None:
+    """bmchartlist score 模式：查找绑定存档中的真实成绩并用 CARD2 渲染。"""
+    qq = str(event.user_id)
+    binding = _bindings.get(qq)
+    if binding is None:
+        await bm_chart.finish(
+            "❌ 尚未绑定存档，请先 /bmbind 绑定后再使用 score 模式"
+        )
+    data = binding["data"]
+    rated: list[Chart] = []
+    for constant, song, diff in charts:
+        entry = SONG_CONSTANTS.get(song) or {}
+        score = _score_from_archive(data, song, diff, entry)
+        if score <= 0:
+            continue
+        potential = calculate_chart_potential(score, constant)
+        rated.append(
+            Chart(
+                name=song,
+                diff=diff,
+                constant=constant,
+                score=score,
+                potential=potential,
+                original_name=str(entry.get("originalName") or song),
+            )
+        )
+    if not rated:
+        await bm_chart.finish("❌ 该范围内没有你打过的谱面")
+    rated.sort(key=lambda c: c.potential, reverse=True)
+    img_bytes = await asyncio.to_thread(render_score_grid, rated)
+    await bm_chart.finish(
+        MessageSegment.image(
+            await asyncio.to_thread(shrink_for_send, img_bytes)
+        )
+    )
+
+
 @bm_chart.handle()
-async def handle_chart(arg: Message = CommandArg()) -> None:
+async def handle_chart(event: MessageEvent, arg: Message = CommandArg()) -> None:
     """按定数区间/难度生成定数表图（/bmchartlist）。"""
     args = arg.extract_plain_text().split()
     if not args:
@@ -1732,39 +1797,20 @@ async def handle_chart(arg: Message = CommandArg()) -> None:
             "定数：13 表示 13.0~13.5，13+ 表示 13.6~13.9，13.4 表示精确 13.4\n"
             "/bmchartlist all 输出全部谱面定数（可加难度，如 all TT）\n"
             "/bmchartlist TT（全部定数）\n不写难度表示全部难度\n"
-            "末尾加 6+ 位分数启用模拟分数模式，如 /bmchartlist 11 12 TT 990000"
+            "末尾加 score 启用成绩渲染模式，如 /bmchartlist 11 12 TT score"
         )
     if not SONG_CONSTANTS:
         await bm_chart.finish("❌ 定数表未加载")
     try:
-        lower, upper, diffs, score = _parse_chart_args(args)
+        lower, upper, diffs, show_score = _parse_chart_args(args)
     except ValueError as exc:
         await bm_chart.finish(f"❌ {exc}")
     charts = _collect_charts(SONG_CONSTANTS, lower, upper, diffs)
     if not charts:
         await bm_chart.finish("❌ 该范围内没有符合条件的曲目")
-    # 模拟分数模式：用 bmrating 同款 CARD2 卡片渲染
-    if score is not None:
-        rated = []
-        for constant, song, diff in charts:
-            potential = calculate_chart_potential(score, constant)
-            entry = SONG_CONSTANTS.get(song) or {}
-            rated.append(
-                Chart(
-                    name=song,
-                    diff=diff,
-                    constant=constant,
-                    score=score,
-                    potential=potential,
-                    original_name=str(entry.get("originalName") or song),
-                )
-            )
-        img_bytes = await asyncio.to_thread(render_score_grid, rated, score)
-        await bm_chart.finish(
-            MessageSegment.image(
-                await asyncio.to_thread(shrink_for_send, img_bytes)
-            )
-        )
+    # 成绩渲染模式：用 bmrating 同款 CARD2 卡片显示绑定存档中的真实成绩
+    if show_score:
+        await _handle_chart_score(event, charts)
     if lower is None and upper is None and not diffs:
         # 全量定数表（/bmchartlist all）：渲染慢，优先发磁盘缓存图
         if _ALL_CHARTS_CACHE.exists():
