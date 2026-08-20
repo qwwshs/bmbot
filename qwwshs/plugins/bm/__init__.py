@@ -559,7 +559,7 @@ _HELP_TEXT = (
     "   末尾加 score 启用成绩渲染模式（需绑定存档）\n"
     "/bmrandom <定数1> [定数2] [难度...] — 在定数区间内随机挑一首曲目\n"
 "/bmchart <曲名> — 谱面预览图（先选曲目再选难度）\n"
-"/bmn10 — 查看 N10 固定曲池（20 首）\n"
+"/bmn10 — 查看 N10 固定曲池（22 首）\n"
 "/bmskin — 切换谱面预览的音符皮肤\n"
 "/bmbotversion — 查看 bot 版本\n"
     "━━━━━━━━━━━━━━━━━━\n"
@@ -1254,7 +1254,7 @@ def _resolve_n10_entry(
 
 @bm_n10.handle()
 async def handle_n10() -> None:
-    """输出 N10 固定曲池（20 首）及定数，使用 bmchartlist 同款卡片排版。"""
+    """输出 N10 固定曲池（22 首）及定数，使用 bmchartlist 同款卡片排版。"""
     if not SONG_CONSTANTS:
         await bm_n10.finish("❌ 定数表未加载")
     charts: list[tuple[float, str, str]] = []

@@ -4,7 +4,7 @@
 
 - ChartPotential 为分段线性函数（满分 +3.25，其余按分数区间插值）
 - B30 = 全部谱面 ChartPotential 降序前 30 张的平均值（不足 30 张仍除以 30）
-- N10 = 固定 20 首曲池内前 10 张加权平均（前 5 张权重 0.6，后 5 张权重 0.4，除以 5）
+- N10 = 固定 22 首曲池内前 10 张加权平均（前 5 张权重 0.6，后 5 张权重 0.4，除以 5）
 - 最终 Rating = 0.8 x B30 + 0.2 x N10
 - GOAL 推分目标：二分查找推 ``GOAL_INCREASE`` Rating 所需的最低分数
 """
@@ -319,6 +319,8 @@ N10_SONG_LIST = [
     "Infinity",
     "GIFT",
     "Double Life",
+    "small DENG kitchen",
+    "The Echo of Peach Color",
 ]
 
 

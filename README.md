@@ -90,7 +90,7 @@ cp .env.example .env       # Windows: copy .env.example .env
 - **ChartPotential**：分段线性函数（1000000 → 定数+3.25；其余区间见 `rating.py`）
 - **Rating** = 0.8 × B30 平均 + 0.2 × N10 平均
 - **B30**：全部谱面 ChartPotential 降序前 30（不足 30 仍 ÷30），图内附 OVERFLOW 后 3 首
-- **N10**：固定 20 首曲池内前 10（前 5 权重 0.6，后 5 权重 0.4，÷5）
+- **N10**：固定 22 首曲池内前 10（前 5 权重 0.6，后 5 权重 0.4，÷5）
 - **GOAL 推分目标**：每行显示推 0.005 Rating 所需的最低分数（无法推分显示 `GOAL 无法推分`）
 
 ## 🖥️ 部署与运维
