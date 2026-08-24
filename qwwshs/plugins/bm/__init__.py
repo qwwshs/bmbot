@@ -312,7 +312,7 @@ def _store_binding(qq: str, data: dict, raw_b64: str | None = None) -> str:
     _bindings[qq] = binding
     _save_bindings()
     name = str(data.get("AccountName") or "未知玩家")
-    return f"✅ 绑定成功！\n玩家：{name}\n发送 /bmrating 查看 Rating"
+    return f"✅ 绑定成功！\n玩家：{name}\n发送 /bmrating 查看 Rating\n发送 /bmexport 可导出存档文件"
 
 
 def _decode_text(raw: bytes) -> str:
