@@ -35,7 +35,7 @@ EXTRA_PATH = ROOT / "data" / "bm" / "constants_extra.json"
 # 谱面难度：Info 对照只含 RL/IL/TT，其余难度留空待人工补
 _ALL_DIFFS = ("RL", "IL", "TT", "RU", "DM", "FL")
 
-# 追加谱面类型（写入「追加谱面」列，决定定数进哪个难度）
+# 追加谱面类型：定数进哪个难度（新表每类独立列组，旧表单列「追加谱面」用类型值区分）
 _EXTRA_DIFF_TYPES = {"RU": "RUIN", "DM": "DREAMY", "FL": "FOOL"}
 
 _XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -52,6 +52,13 @@ _COLUMN_MATCHERS = (
     ("IL", lambda t: "ILLUSION谱面难度" in t),
     ("charterTT", lambda t: "TWIST谱面谱师" in t),
     ("TT", lambda t: "TWIST谱面难度" in t),
+    ("charterRU", lambda t: "RUIN谱面谱师" in t),
+    ("RU", lambda t: "RUIN谱面难度" in t),
+    ("charterDM", lambda t: "DREAMY谱面谱师" in t),
+    ("DM", lambda t: "DREAMY谱面难度" in t),
+    ("charterFL", lambda t: "FOOL谱面谱师" in t),
+    ("FL", lambda t: "FOOL谱面难度" in t),
+    # 旧版单列组：仅在表里存在旧列（没有新列组）时写入
     ("extraType", lambda t: t == "追加谱面"),
     ("extraCharter", lambda t: "追加谱面谱师" in t),
     ("extraConst", lambda t: "追加谱面难度" in t),
@@ -127,13 +134,21 @@ def _row_values(title: str, entry: dict) -> dict[str, str | float]:
         const = entry.get(diff)
         if const is not None:
             values[diff] = const
+    # 追加谱面：新表每类独立列组（RUIN/DREAMY/FOOL 各一组谱师+难度）；
+    # 旧表单列「追加谱面」只有一格，按 RU/RUIN 优先写第一张
+    legacy_written = False
     for diff, extra_type in _EXTRA_DIFF_TYPES.items():
-        if entry.get(diff) is None:
+        const = entry.get(diff)
+        if const is None:
             continue
-        values["extraType"] = extra_type
-        values["extraCharter"] = str(charter.get(diff) or "")
-        values["extraConst"] = entry[diff]
-        break
+        name = str(charter.get(diff) or "")
+        values[f"charter{diff}"] = name
+        values[diff] = const
+        if not legacy_written:
+            values["extraType"] = extra_type
+            values["extraCharter"] = name
+            values["extraConst"] = const
+            legacy_written = True
     aliases = [str(a).strip() for a in entry.get("aliases") or [] if str(a).strip()]
     if aliases:
         values["aliases"] = ", ".join(aliases)

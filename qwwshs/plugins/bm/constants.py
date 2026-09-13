@@ -16,6 +16,10 @@ import re
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +131,14 @@ def _parse_rows(root: ET.Element, shared: list[str]) -> list[list[str | float | 
     return rows
 
 
+# 追加谱面列组：难度 → (谱师列角色, 定数列角色)。RUIN 与 VOID 同占 RU 难度
+# （Info 里 for my longing 的 Diff 写作 VOID），DREAMY/FOOL 各自独立成组
+_EXTRA_COLUMN_GROUPS = (
+    ("RU", "charterRU", "RU"),
+    ("DM", "charterDM", "DM"),
+    ("FL", "charterFL", "FL"),
+)
+
 _HEADER_MATCHERS = (
     ("title", lambda t: "曲名" in t and "原曲名" not in t),
     ("originalName", lambda t: "原曲名" in t),
@@ -137,6 +149,13 @@ _HEADER_MATCHERS = (
     ("charterRL", lambda t: "REALITY谱面谱师" in t),
     ("charterIL", lambda t: "ILLUSION谱面谱师" in t),
     ("charterTT", lambda t: "TWIST谱面谱师" in t),
+    ("charterRU", lambda t: "RUIN谱面谱师" in t),
+    ("RU", lambda t: "RUIN谱面难度" in t),
+    ("charterDM", lambda t: "DREAMY谱面谱师" in t),
+    ("DM", lambda t: "DREAMY谱面难度" in t),
+    ("charterFL", lambda t: "FOOL谱面谱师" in t),
+    ("FL", lambda t: "FOOL谱面难度" in t),
+    # 旧版单列组（追加谱面 / 追加谱面谱师 / 追加谱面难度）：新列组缺失时兜底
     ("extraType", lambda t: t == "追加谱面"),
     ("extraCharter", lambda t: "追加谱面谱师" in t),
     ("extraConst", lambda t: "追加谱面难度" in t),
@@ -177,13 +196,8 @@ def _title_text(value: str | float | None) -> str:
 def _extract_charter(
     row: list[str | float | None],
     indices: dict[str, int],
-    *,
-    extra_valid: bool,
 ) -> dict[str, str]:
-    """提取谱师字段：难度 -> 谱师名义（仅非空；含追加谱面谱师）。
-
-    ``extra_valid`` 为 False 时忽略追加谱面谱师（对应定数解析失败的谱面）。
-    """
+    """提取主难度谱师字段：难度 -> 谱师名义（仅非空）。"""
 
     def at(key: str) -> str | float | None:
         index = indices.get(key)
@@ -199,13 +213,43 @@ def _extract_charter(
             charter_name = str(at(key) or "").strip()
             if charter_name:
                 charter[diff] = charter_name
-    if extra_valid and "extraCharter" in indices:
-        extra_charter = str(at("extraCharter") or "").strip()
-        if extra_charter:
-            target = _EXTRA_TYPE_MAP.get(str(at("extraType") or "").strip().upper())
-            if target:
-                charter[target] = extra_charter
     return charter
+
+
+def _add_extra_charts(
+    entry: dict,
+    indices: dict[str, int],
+    at: Callable[[str], str | float | None],
+) -> None:
+    """读追加谱面列组（RUIN/VOID、DREAMY、FOOL 各一组）填进条目。
+
+    旧版单列组（「追加谱面」类型 + 谱师 + 难度）在新列组一个都没有时兜底，
+    定数解析不出来就不记谱师（避免把表头/说明文字当成谱师名义）。
+    """
+
+    def read(charter_role: str, const_role: str) -> tuple[float | None, str]:
+        constant = _parse_constant(at(const_role))
+        name = str(at(charter_role) or "").strip()
+        return constant, name
+
+    for diff, charter_role, const_role in _EXTRA_COLUMN_GROUPS:
+        constant, name = read(charter_role, const_role)
+        if constant is None:
+            continue
+        entry[diff] = constant
+        if name:
+            entry["charter"][diff] = name
+    if any(role in indices for _, _, role in _EXTRA_COLUMN_GROUPS):
+        return
+    constant, name = read("extraCharter", "extraConst")
+    if constant is None:
+        return
+    target = _EXTRA_TYPE_MAP.get(str(at("extraType") or "").strip().upper())
+    if target is None:
+        return
+    entry[target] = constant
+    if name:
+        entry["charter"][target] = name
 
 
 def _parse_entry(
@@ -248,17 +292,8 @@ def _parse_entry(
             for alias in re.split(r"[,，]", str(at("aliases") or ""))
             if alias.strip()
         ]
-    extra_const: float | None = None
-    if "extraType" in indices and "extraConst" in indices:
-        extra_type = str(at("extraType") or "").strip().upper()
-        extra_const = _parse_constant(at("extraConst"))
-        if extra_const is not None:
-            target = _EXTRA_TYPE_MAP.get(extra_type)
-            if target:
-                entry[target] = extra_const
-    entry["charter"] = _extract_charter(
-        row, indices, extra_valid=extra_const is not None
-    )
+    entry["charter"] = _extract_charter(row, indices)
+    _add_extra_charts(entry, indices, at)
     return title, entry
 
 
