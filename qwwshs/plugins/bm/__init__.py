@@ -1280,7 +1280,7 @@ def _resolve_n10_entry(
 
 @bm_n10.handle()
 async def handle_n10() -> None:
-    """输出 N10 固定曲池（22 首）及定数，使用 bmchartlist 同款卡片排版。"""
+    """输出 N10 固定曲池（28 首）及定数，使用 bmchartlist 同款卡片排版。"""
     if not SONG_CONSTANTS:
         await bm_n10.finish("❌ 定数表未加载")
     charts: list[tuple[float, str, str]] = []

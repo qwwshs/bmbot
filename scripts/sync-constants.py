@@ -185,8 +185,14 @@ def parse_info() -> tuple[dict[str, dict], dict[tuple[str, str], dict]]:
         else:
             diff = fields.get("Path", "").upper()
             if current and diff:
-                # Level = alpha（未定级占位谱面，如 DLevel=0.001）跳过
-                if not re.search(r"\d", fields.get("Level", "")):
+                # 特殊谱面（DREAMY/FOOL）的 Level 是字母占位（alpha/beta/gamma、
+                # 狂/藏/割），定数取 DLevel：0.001 是官方「未定级」标记，
+                # 定数表既有条目也记 0.001。Level 与 DLevel 都取不到定数，
+                # 才算未定级占位谱面跳过
+                dlevel = _to_float(fields.get("DLevel", ""))
+                if not re.search(r"\d", fields.get("Level", "")) and (
+                    dlevel is None or dlevel <= 0
+                ):
                     continue
                 charts[(current, diff)] = {
                     "dlevel": fields.get("DLevel", ""),
