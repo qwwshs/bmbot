@@ -296,8 +296,10 @@ def normalized_variants(name: str) -> frozenset[str]:
 ALL_DIFFS = ("RL", "IL", "TT", "RU", "DM", "FL")
 GRADES = ("S", "AAA+", "AAA", "AA", "A", "B", "F")
 
-# N10 固定曲池（Rainy Waltz / Nini / Melusia 的 RUIN 不计入，
-# 通过归一化时剥离 ``（RU）`` 后缀实现）
+# N10 固定曲池：``chart/Info`` 中 Song 的 ``Tag`` 含 ``N10_S1`` 的曲目，
+# 曲名用内部名（3.3.5 共 28 首，每次游戏更新按同样规则重新对照）。
+# Rainy Waltz / Nini / Melusia 的 RUIN 不计入，
+# 通过归一化时剥离 ``（RU）`` 后缀实现
 N10_SONG_LIST = [
     "Spiritworks",
     "xu",
@@ -321,6 +323,13 @@ N10_SONG_LIST = [
     "Double Life",
     "small DENG kitchen",
     "The Echo of Peach Color",
+    # 3.3.5 新增（Info 的 N10_S1 标签）
+    "Nine Lights",
+    "Cyber Attack",
+    "Ark",
+    "Qamar",
+    "fuzzy-navel",
+    "FRENZYaSHINY",
 ]
 
 

@@ -23,6 +23,8 @@ import importlib.util
 import json
 import re
 import sys
+import xml.etree.ElementTree as ET
+from collections import Counter
 from pathlib import Path
 
 # 仓库根目录（本文件位于 <root>/scripts/ 下）
@@ -32,6 +34,110 @@ EXTRA_PATH = ROOT / "data" / "bm" / "constants_extra.json"
 
 # 谱面难度：Info 对照只含 RL/IL/TT，其余难度留空待人工补
 _ALL_DIFFS = ("RL", "IL", "TT", "RU", "DM", "FL")
+
+# 追加谱面类型（写入「追加谱面」列，决定定数进哪个难度）
+_EXTRA_DIFF_TYPES = {"RU": "RUIN", "DM": "DREAMY", "FL": "FOOL"}
+
+_XLSX_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+# 写入 xlsx 时的列角色 → 表头文本匹配（与 constants.py 的 _HEADER_MATCHERS
+# 同规则）：列位置按表头定位，定数表调整列序后仍能写对列
+_COLUMN_MATCHERS = (
+    ("title", lambda t: "曲名" in t and "原曲名" not in t),
+    ("artist", lambda t: "曲师" in t),
+    ("painter", lambda t: "画师" in t),
+    ("charterRL", lambda t: "REALITY谱面谱师" in t),
+    ("RL", lambda t: "REALITY谱面难度" in t),
+    ("charterIL", lambda t: "ILLUSION谱面谱师" in t),
+    ("IL", lambda t: "ILLUSION谱面难度" in t),
+    ("charterTT", lambda t: "TWIST谱面谱师" in t),
+    ("TT", lambda t: "TWIST谱面难度" in t),
+    ("extraType", lambda t: t == "追加谱面"),
+    ("extraCharter", lambda t: "追加谱面谱师" in t),
+    ("extraConst", lambda t: "追加谱面难度" in t),
+    ("aliases", lambda t: "别名" in t),
+)
+
+
+def _col_index(ref: str) -> int | None:
+    """单元格引用（如 ``AB12``）→ 0 起的列下标。"""
+    letters = "".join(ch for ch in ref if ch.isalpha())
+    if not letters:
+        return None
+    index = 0
+    for ch in letters.upper():
+        index = index * 26 + (ord(ch) - ord("A") + 1)
+    return index - 1
+
+
+def _col_letter(index: int) -> str:
+    """0 起的列下标 → 列字母。"""
+    letters = ""
+    index += 1
+    while index > 0:
+        index, rem = divmod(index - 1, 26)
+        letters = chr(ord("A") + rem) + letters
+    return letters
+
+
+def _cell_text(cell: ET.Element, shared: list[str]) -> str | None:
+    """单元格文本：兼容共享字符串与内联字符串（官方导出格式）。"""
+    value = cell.find(f"{{{_XLSX_NS}}}v")
+    if cell.get("t") == "s" and value is not None and value.text:
+        try:
+            return shared[int(value.text)]
+        except (ValueError, IndexError):
+            return None
+    inline = cell.find(f"{{{_XLSX_NS}}}is")
+    if inline is not None:
+        return "".join(t.text or "" for t in inline.iter(f"{{{_XLSX_NS}}}t"))
+    value = cell.find(f"{{{_XLSX_NS}}}v")
+    return value.text if value is not None else None
+
+
+def _header_columns(header: ET.Element, shared: list[str]) -> dict[str, int]:
+    """按表头文本定位列角色（表头缺列时该角色不写入）。"""
+    columns: dict[str, int] = {}
+    for cell in header.findall(f"{{{_XLSX_NS}}}c"):
+        index = _col_index(cell.get("r", ""))
+        if index is None:
+            continue
+        text = (_cell_text(cell, shared) or "").strip()
+        if not text:
+            continue
+        for role, match in _COLUMN_MATCHERS:
+            if role not in columns and match(text):
+                columns[role] = index
+                break
+    return columns
+
+
+def _row_values(title: str, entry: dict) -> dict[str, str | float]:
+    """条目 → 「列角色: 值」。曲名用显示名、内部名进别名列（主表既有约定）。"""
+    charter = entry.get("charter") or {}
+    values: dict[str, str | float] = {
+        "title": str(entry.get("originalName") or title),
+        "artist": str(entry.get("artist") or ""),
+        "painter": str(entry.get("painter") or ""),
+    }
+    for diff in ("RL", "IL", "TT"):
+        name = str(charter.get(diff) or "")
+        if name:
+            values[f"charter{diff}"] = name
+        const = entry.get(diff)
+        if const is not None:
+            values[diff] = const
+    for diff, extra_type in _EXTRA_DIFF_TYPES.items():
+        if entry.get(diff) is None:
+            continue
+        values["extraType"] = extra_type
+        values["extraCharter"] = str(charter.get(diff) or "")
+        values["extraConst"] = entry[diff]
+        break
+    aliases = [str(a).strip() for a in entry.get("aliases") or [] if str(a).strip()]
+    if aliases:
+        values["aliases"] = ", ".join(aliases)
+    return values
 
 
 def load_constants_standalone() -> dict[str, dict]:
@@ -116,6 +222,7 @@ def empty_entry(title: str) -> dict:
         "FL": None,
         "aliases": [],
         "artist": "",
+        "painter": "",
         "originalName": title,
         "charter": {},
     }
@@ -149,6 +256,8 @@ def build_updates(  # noqa: C901, PLR0912, PLR0915
         entry["originalName"] = display
         if song["artist"]:
             entry["artist"] = song["artist"]
+        if song.get("painter"):
+            entry["painter"] = song["painter"]
         for diff in _ALL_DIFFS:
             chart = charts.get((song_key, diff))
             if chart is None:
@@ -189,7 +298,11 @@ def build_updates(  # noqa: C901, PLR0912, PLR0915
                 parts.append(f"谱师 {charter_parts}")
             filled.append(f"{title} | 补充 {', '.join(parts)}")
         else:
-            updates[title] = entry
+            # 主表以显示名作曲名、内部名进别名列（既有约定）；补充表用同一个键，
+            # 否则 --apply 入库后内部名键与主表显示名键错开，运行时会多出幽灵条目
+            if normalize(display) != normalize(title):
+                entry["aliases"] = [title]
+            updates[display] = entry
             consts = ", ".join(
                 f"{d}={entry[d]}" for d in _ALL_DIFFS if entry[d] is not None
             )
@@ -209,11 +322,13 @@ def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
     """把补充曲目正式追加进 constexcel.xlsx（新增行），返回 (新增行数, 跳过数)。
 
     仅追加主表中没有的曲目；已有曲目由运行时补充表机制补缺失字段。
+    列位置按表头文本定位（同 ``constants.py`` 的匹配规则），行样式沿用同列
+    已有单元格——定数表调整列序或样式后仍能写对。
     """
-    import xml.etree.ElementTree as ET
+    import io
     import zipfile
 
-    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    ns = _XLSX_NS
     xlsx_path = ROOT / "qwwshs" / "plugins" / "bm" / "constexcel.xlsx"
     with zipfile.ZipFile(xlsx_path) as zf:
         shared_root = None
@@ -231,34 +346,39 @@ def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
             return 0, 0
         last_row = max(int(r.get("r", "0")) for r in rows)
 
-        def cell_text(cell: ET.Element) -> str | None:
-            """单元格文本：兼容共享字符串与内联字符串（官方导出格式）。"""
-            v = cell.find(f"{{{ns}}}v")
-            if cell.get("t") == "s" and v is not None and v.text:
-                try:
-                    return shared[int(v.text)]
-                except (ValueError, IndexError):
-                    return None
-            inline = cell.find(f"{{{ns}}}is")
-            if inline is not None:
-                return "".join(t.text or "" for t in inline.iter(f"{{{ns}}}t"))
-            return None
+        columns = _header_columns(rows[0], shared)
+        if "title" not in columns:
+            print("✗ 定数表未找到【曲名】表头，跳过写入")
+            return 0, 0
 
-        # 已有曲名（归一化）避免重复追加
-        known = set()
-        header = rows[0]
-        title_col = "A"
-        for cell in header.findall(f"{{{ns}}}c"):
-            name = cell_text(cell)
-            if name and "曲名" in name and "原曲名" not in name:
-                title_col = cell.get("r", "A")[0]
+        # 已有曲名（归一化）避免重复追加：曲名列 + 别名列（别名存内部名，
+        # 新曲曲名胜在曲名列，只查曲名列会在下次 --apply 重复追加）
+        known: set[str] = set()
+        # 各列沿用已有单元格的样式（官方导出格式的定数带 "0.0" 数字格式），
+        # 取众数避免个别手改单元格的样式带偏
+        style_count: dict[int, Counter] = {}
         for row in rows[1:]:
             for cell in row.findall(f"{{{ns}}}c"):
-                if cell.get("r", "").startswith(title_col):
-                    text = cell_text(cell)
-                    if text:
-                        known.add(normalize(text))
-                    break
+                index = _col_index(cell.get("r", ""))
+                if index is None:
+                    continue
+                text = _cell_text(cell, shared)
+                if not text:
+                    continue
+                if cell.get("s"):
+                    style_count.setdefault(index, Counter())[str(cell.get("s"))] += 1
+                if index == columns.get("title"):
+                    known.add(normalize(text))
+                elif index == columns.get("aliases"):
+                    known.update(
+                        normalize(part)
+                        for part in re.split(r"[,，]", text)
+                        if part.strip()
+                    )
+        column_style = {
+            index: counter.most_common(1)[0][0]
+            for index, counter in style_count.items()
+        }
         # 追加行
         new_row = last_row
         added_count = 0
@@ -268,35 +388,22 @@ def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
                 skipped += 1
                 continue
             new_row += 1
-            cells = {
-                "A": title,
-                "B": entry.get("originalName") or title,
-                "C": entry.get("artist") or "",
-                "H": entry.get("RL"),
-                "J": entry.get("IL"),
-                "L": entry.get("TT"),
-                "G": entry.get("charter", {}).get("RL", ""),
-                "I": entry.get("charter", {}).get("IL", ""),
-                "K": entry.get("charter", {}).get("TT", ""),
-            }
-            # 追加谱面（RU/DM/FL）→ M/N/O 列
-            extra_map = {"RU": "RUIN", "DM": "DREAMY", "FL": "FOOL"}
-            for diff, extra_type in extra_map.items():
-                if entry.get(diff) is not None:
-                    cells["M"] = extra_type
-                    cells["N"] = entry.get("charter", {}).get(diff, "")
-                    cells["O"] = entry.get(diff)
-                    break
+            values = _row_values(title, entry)
             row_el = ET.SubElement(data, f"{{{ns}}}row")
             row_el.set("r", str(new_row))
             row_el.set("spans", "1:16")
-            for col, value in cells.items():
+            for role, value in values.items():
                 if value in (None, ""):
                     continue
+                index = columns.get(role)
+                if index is None:
+                    continue
                 cell = ET.SubElement(row_el, f"{{{ns}}}c")
-                cell.set("r", f"{col}{new_row}")
+                cell.set("r", f"{_col_letter(index)}{new_row}")
+                style = column_style.get(index)
+                if style:
+                    cell.set("s", style)
                 if isinstance(value, float):
-                    cell.set("s", "13")
                     v_el = ET.SubElement(cell, f"{{{ns}}}v")
                     v_el.text = repr(value)
                 elif shared_root is not None:
@@ -310,25 +417,25 @@ def apply_to_xlsx(  # noqa: C901, PLR0912, PLR0915
                         si = ET.SubElement(shared_root, f"{{{ns}}}si")
                         t_el = ET.SubElement(si, f"{{{ns}}}t")
                         t_el.text = text
-                    cell.set("s", "12")
                     cell.set("t", "s")
                     v_el = ET.SubElement(cell, f"{{{ns}}}v")
                     v_el.text = str(idx)
                 else:
                     # 官方导出格式（内联字符串）：新行同样用内联写法
-                    cell.set("s", "12")
                     cell.set("t", "inlineStr")
                     is_el = ET.SubElement(cell, f"{{{ns}}}is")
                     t_el = ET.SubElement(is_el, f"{{{ns}}}t")
                     t_el.text = str(value)
             added_count += 1
+            known.add(normalize(str(values.get("title") or title)))
             known.add(normalize(title))
+            for alias in str(values.get("aliases") or "").split(","):
+                if alias.strip():
+                    known.add(normalize(alias))
         if added_count == 0:
             return 0, skipped
         # 写回 xlsx：内存构建新 zip 后直接覆盖写（文件可能被 Excel 以共享读打开，
         # unlink/replace 会被锁，wb 覆盖写可行）
-        import io
-
         sheet_xml = ET.tostring(sheet_root, encoding="utf-8", xml_declaration=True)
         buf = io.BytesIO()
         with zipfile.ZipFile(xlsx_path) as src, zipfile.ZipFile(buf, "w") as dst:
