@@ -1,4 +1,4 @@
-"""Berry Melody 存档解密。
+"""Berry Melody 存档解密与协议展开。
 
 复刻 ``bm-score(4).html`` 中 ``performDecryption`` 的流程：
 
@@ -6,14 +6,18 @@
 2. 密文按 RSA 密钥块大小分块，先尝试 RSA-OAEP(SHA1)，失败回退 RSAES-PKCS1-V1_5
 3. 拼接明文，UTF-8 解码并去除控制字符
 4. 按 JSON 解析（带 ``{``/``}`` 修正兜底）
+5. 展开 ``SaveProtocol_<名>`` 压缩成绩块（见 :func:`expand_protocol`）
 """
 
 from __future__ import annotations
 
 import base64
+import binascii
+import gzip
 import json
 import re
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -30,18 +34,34 @@ _UTF16_MIN_LEN = 40
 # UTF-16LE 判定阈值：奇数位（高字节）为 NUL 的比例下限
 _UTF16_ODD_NUL_RATIO = 0.5
 
+# 协议压缩值前缀，与游戏 ProtocolUtil.GzipPrefix 一致
+_GZIP_PREFIX = "GZIP1:"
+# 成绩/解锁键被压成单条时的键名前缀，如 SaveProtocol_26_8_30
+_PROTOCOL_PREFIX = "SaveProtocol_"
+# 协议名合法字符（存档内容不可信，避免 ../ 之类的路径穿越）
+_PROTOCOL_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
+# 协议模板目录：与游戏 Resources/Text/SaveProtocol 同名文件，升级只换文件不改代码
+_PROTOCOL_DIR = Path(__file__).resolve().parent / "SaveProtocol"
+# GZip 魔数（含 compression method = 8）
+_GZIP_MAGIC = b"\x1f\x8b\x08"
+# GZip 最短字节数（10 字节头 + 8 字节尾）
+_GZIP_MIN_LEN = 18
+
 
 def parse_account_data(text: str) -> dict:
     """自动识别并解析账号数据。
 
     - 包含 ``<RSAKeyValue>`` 标签 → 按原始存档 RSA 解密
     - 以 ``{`` 开头 → 直接按 JSON 解析
+
+    两种来源都会展开协议压缩块（见 :func:`expand_protocol`），
+    因此克莱因导出（压缩）与本地保存（明文）的存档解析结果一致。
     """
     # 入口兜底：剔除 NUL 等控制字符（UTF-16 无 BOM 存档被误按 UTF-8
     # 解码后，NUL 会穿插在 <RSAKeyValue> 标签中间，必须先剔除才能识别）
     text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text.strip())
     if "<RSAKeyValue>" in text and "</RSAKeyValue>" in text:
-        return decrypt_save(text)
+        return expand_protocol(decrypt_save(text))
     if text.startswith("{"):
         try:
             data = json.loads(text)
@@ -49,7 +69,7 @@ def parse_account_data(text: str) -> dict:
             raise DecryptError(f"JSON 解析失败: {exc}") from exc  # noqa: TRY003
         if not isinstance(data, dict):
             raise DecryptError("JSON 不是有效的账号数据")  # noqa: TRY003
-        return data
+        return expand_protocol(data)
     raise DecryptError(  # noqa: TRY003
         "无法识别账号数据：请粘贴从 <RSAKeyValue> 开始的完整存档，或解密后的 JSON"
     )
@@ -72,7 +92,7 @@ def _decode_plaintext(plaintext: bytes) -> str:
 
 
 def decrypt_save(text: str) -> dict:
-    """解密完整存档文本并返回账号 JSON。"""
+    """解密完整存档文本并返回账号 JSON（协议压缩块交给 :func:`expand_protocol`）。"""
     key_xml, cipher = _split_key_and_cipher(text)
     private_key = _build_private_key(key_xml)
     block_size = private_key.key_size // 8
@@ -184,6 +204,95 @@ def _parse_json_lenient(text: str) -> dict:
     if not isinstance(data, dict):
         raise DecryptError("解密结果不是有效的账号数据")
     return data
+
+
+def _protocol_keys(name: str) -> tuple[str, ...]:
+    """读取 ``SaveProtocol/<名>.txt`` 的键序模板。
+
+    模板与游戏 ``Resources/Text/SaveProtocol/<名>.txt`` 逐字节同源：按逗号
+    分隔键名、允许换行排版。游戏更新协议时（键序即数据顺序，不可改写）
+    只需把新的模板文件放进目录，代码无需改动。
+    """
+    if not _PROTOCOL_NAME_RE.fullmatch(name):
+        raise DecryptError(f"存档协议名不合法：{name!r}")
+    path = _PROTOCOL_DIR / f"{name}.txt"
+    try:
+        content = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise DecryptError(  # noqa: TRY003
+            f"缺少存档协议模板 {name}.txt（游戏更新协议后需同步放入"
+            f" {_PROTOCOL_DIR}），请反馈给 bot 维护者"
+        ) from exc
+    keys = [key.strip() for key in content.split(",")]
+    # 末尾逗号/空行产生的空段丢弃，其余位置的空段视为模板损坏
+    while keys and not keys[-1]:
+        keys.pop()
+    if not keys or any(not key for key in keys):
+        raise DecryptError(f"存档协议模板 {name}.txt 存在空键")  # noqa: TRY003
+    if len(set(keys)) != len(keys):
+        raise DecryptError(f"存档协议模板 {name}.txt 存在重复键")  # noqa: TRY003
+    return tuple(keys)
+
+
+def _decode_protocol_value(value: str) -> str:
+    """协议值 → 逗号串：``GZIP1:`` 前缀按 GZip 解压，其它值原样返回（旧格式）。"""
+    if not value.startswith(_GZIP_PREFIX):
+        return value
+    try:
+        raw = base64.b64decode(value[len(_GZIP_PREFIX) :])
+    except (binascii.Error, ValueError) as exc:
+        raise DecryptError(f"存档协议压缩数据 Base64 解码失败: {exc}") from exc  # noqa: TRY003
+    # 与游戏 DecompressContent 一致的格式校验
+    if len(raw) < _GZIP_MIN_LEN or not raw.startswith(_GZIP_MAGIC):
+        raise DecryptError("存档协议压缩数据不是有效的 GZip 格式")  # noqa: TRY003
+    try:
+        content = gzip.decompress(raw)
+    except (OSError, EOFError) as exc:
+        raise DecryptError(f"存档协议解压失败: {exc}") from exc  # noqa: TRY003
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise DecryptError(f"存档协议明文不是有效的 UTF-8: {exc}") from exc  # noqa: TRY003
+
+
+def expand_protocol(data: dict, *, inplace: bool = False) -> dict:
+    """展开存档中的 ``SaveProtocol_<名>`` 压缩成绩块，还原成明文键。
+
+    游戏 26_8_30 起，克莱因导出/转移的存档会把 ``<曲名>/Unlock`` 与全部
+    ``BestScore_`` / ``BestCombo_`` 键按协议模板顺序压成一条
+    ``GZIP1:`` + Base64 的值（本地保存的存档仍是明文键），游戏读取时用
+    ``ProtocolUtil.Decompress`` 还原。此处复刻同一流程，使两种存档
+    （以及直接粘贴的 JSON）解析后得到相同的键值。
+
+    空位代表该键在存档中不存在（游戏压缩时用空字符串占位）。
+    默认返回副本；``inplace=True`` 时直接修改并返回原字典。
+    模板缺失或数据不合法时报错——否则会把「无成绩」当成真实成绩。
+    """
+    names = sorted(
+        key[len(_PROTOCOL_PREFIX) :] for key in data if key.startswith(_PROTOCOL_PREFIX)
+    )
+    if not names:
+        return data if inplace else dict(data)
+    result = data if inplace else dict(data)
+    for name in names:
+        keys = _protocol_keys(name)
+        value = result.pop(_PROTOCOL_PREFIX + name)
+        if value is None:
+            raise DecryptError(f"存档协议 {name} 数据为 null")  # noqa: TRY003
+        values = _decode_protocol_value(str(value)).split(",")
+        if len(values) != len(keys):
+            raise DecryptError(  # noqa: TRY003
+                f"存档协议 {name} 数据条数与模板不一致：{len(values)} != {len(keys)}"
+            )
+        for template_key, item in zip(keys, values):
+            if not item:
+                continue
+            if template_key in result:
+                raise DecryptError(  # noqa: TRY003
+                    f"存档协议 {name} 数据与明文键同时存在：{template_key}"
+                )
+            result[template_key] = item
+    return result
 
 
 def _private_key_to_xml(key: rsa.RSAPrivateKey) -> str:

@@ -12,9 +12,10 @@
 4. [皮肤素材更新流程](#4-皮肤素材更新流程)
 5. [曲绘与玩家头像更新](#5-曲绘与玩家头像更新)
 6. [定数表自动同步](#6-定数表自动同步)
-7. [上传服务器与部署](#7-上传服务器与部署)
-8. [更新后验证](#8-更新后验证)
-9. [常见问题](#9-常见问题)
+7. [存档协议模板更新](#7-存档协议模板更新游戏更新协议时)
+8. [上传服务器与部署](#8-上传服务器与部署)
+9. [更新后验证](#9-更新后验证)
+10. [常见问题](#10-常见问题)
 
 ---
 
@@ -329,7 +330,38 @@ Info 中**没有**的曲目（测试谱、未收录谱、新曲抢先版）不�
 > 后续官方补丁发布正式 Info 后，`sync-constants.py` 会自动把这两首的定数
 > （DLevel）与谱师补进补充表，无需重复人工操作。
 
-## 7. 上传服务器与部署
+## 7. 存档协议模板更新（游戏更新协议时）
+
+游戏 **26_8_30** 起，**克莱因导出/转移的存档**会把 `<曲名>/Unlock` 与全部
+`BestScore_` / `BestCombo_` 键按协议模板顺序压成一条
+`SaveProtocol_<协议名>`（`GZIP1:` + Base64），而**本地保存的存档仍是明文键**。
+bot 用协议模板还原压缩存档（`qwwshs/plugins/bm/decrypt.py` 的 `expand_protocol`），
+所以协议更新后必须同步模板，否则绑定克莱因存档会失败并提示「缺少存档协议模板」。
+
+**更新步骤**（协议名形如 `26_8_30`，是版本日期，游戏约半年换一次）：
+
+1. 解包新 APK（见第 2 节），在 `ass\TextAsset\` 中找存档协议文本：
+   游戏内路径为 `Resources/Text/SaveProtocol/<协议名>.txt`，
+   内容按逗号分隔、以 `<曲名>/Unlock,` 开头（可据此确认是否为目标文件）。
+2. **按原样**存为 `qwwshs/plugins/bm/SaveProtocol/<协议名>.txt`：
+   文件名要与存档里 `SaveProtocol_<协议名>` 的后缀完全一致；
+   **键序就是数据顺序，不能改动、排序或去重**。
+3. 提交并部署（走 git，见第 8 节）：
+
+   ```bash
+   git add qwwshs/plugins/bm/SaveProtocol/<协议名>.txt
+   git commit -m "存档协议：新增 <协议名> 模板"
+   git push origin main
+   ssh admin@101.132.120.132 "cd /home/admin/nbbot/qwwshs && bash scripts/restart-bot.sh"
+   ```
+
+4. **验证**：用新版本游戏「切换角色为克莱因 → 导出存档」的存档 `/bmbind`，
+   `/bmrating` 应能正常出分（而不是 0 成绩）；旧协议模板保留，旧存档照常解析。
+
+> 模板缺失时绑定会直接失败并提示协议名；已存量的绑定在启动时展开（`_load_bindings`），
+> 失败会写 error 日志，不会静默当成「无成绩」。
+
+## 8. 上传服务器与部署
 
 代码变更（非 gitignore 素材）走 git：
 
@@ -349,11 +381,12 @@ ssh admin@101.132.120.132 "cd /home/admin/nbbot/qwwshs && bash scripts/restart-b
 2. `python3 scripts/sync-constants.py` 自动同步新谱面数据到定数表（失败不阻塞）
 3. 重启 screen 会话 `nb`（`nb run`）
 
-## 8. 更新后验证
+## 9. 更新后验证
 
 | 检查项 | 命令 | 预期 |
 | --- | --- | --- |
 | 版本号 | `/bmbotversion` | 显示最新版本号 |
+| 克莱因存档 | `/bmbind` 后 `/bmrating`（用克莱因导出的存档） | 正常出分（协议模板已同步） |
 | 新曲检索 | `/bmsong 新曲名` | 能找到曲目 |
 | 新曲定数 | `/bmrating`（绑定含新曲成绩的存档） | 新曲计入定数 |
 | 谱面预览 | `/bmchart 新曲名` → 选难度 | 生成预览图 |
@@ -363,10 +396,12 @@ ssh admin@101.132.120.132 "cd /home/admin/nbbot/qwwshs && bash scripts/restart-b
 | 定数同步日志 | 服务器 `screen -r nb` | 出现「已合并 N 首自动同步的新曲目」 |
 | 全量定数表 | `/bmchartlist all` | 秒回缓存图，新曲已包含在内 |
 
-## 9. 常见问题
+## 10. 常见问题
 
 - **新曲搜不到 / 定数为空**：`Info` 未更新——谱面更新时必须同时上传新的
   `Info` 文件（定数 / 谱师 / 曲师都来自它）。
+- **绑定存档报「缺少存档协议模板」**：游戏更新了存档协议——按第 7 节把新的
+  `SaveProtocol/<协议名>.txt` 放进 `qwwshs/plugins/bm/SaveProtocol/` 并部署。
 - **头像不显示 / 显示默认头像**：新角色头像未放入 `images\`，或
   `CHAR_AVATAR_FILES`（render.py）缺少存档 Path → 文件名的映射；上传后需重启 bot。
 - **git pull 冲突**：`data/` 与 `chart/`、`note/`、`images/` 均已 gitignore，

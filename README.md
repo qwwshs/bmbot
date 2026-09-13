@@ -31,6 +31,8 @@
 > 中文匹配：支持简体中文匹配繁体中文与日本汉字（借助 OpenCC + 内置日文汉字映射 + 定数表的「原曲名」列）。
 >
 > 谱师关联：部分谱师有马甲或合作名义（如 `BZAIG&LeadLink&霜炎`）。先用 `bmsetuptheprimitivecharter` 把本名设为基元，再用 `bmrelatedcharter` 关联其他名义；之后 `bmcharter` 查询本名或任意关联名义都会输出整组谱面。
+>
+> 存档格式：本地保存的 `FormalSave.txt`（明文键）与克莱因导出/转移的存档（成绩键压成 `SaveProtocol_<协议名>`，见 `qwwshs/plugins/bm/SaveProtocol/`）都能解析——压缩存档会按协议模板自动展开，两种格式结果一致。
 
 ## 📦 环境要求
 

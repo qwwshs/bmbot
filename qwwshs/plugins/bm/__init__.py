@@ -59,6 +59,7 @@ from .constants import DATA_DIR, ConstantsError, get_song_constants
 from .decrypt import (
     DecryptError,
     build_save_text,
+    expand_protocol,
     generate_save_key,
     parse_account_data,
 )
@@ -135,7 +136,7 @@ _SONG_PICK_TTL = 120.0
 _ALIAS_MAX_LEN = 30
 
 # 插件版本：修复/小改动 +0.0.1，新增功能 +0.1
-BM_VERSION = "0.8.1"
+BM_VERSION = "0.8.2"
 
 # QQ 号 -> {data: 解密后的账号 JSON, name: 玩家名, bind_time: 时间戳}
 _bindings: dict[str, dict] = {}
@@ -240,18 +241,39 @@ except ConstantsError as exc:
     SONG_CONSTANTS = {}
 
 
+def _expand_stored_data(qq: str, binding: dict) -> bool:
+    """展开绑定存档里的协议压缩成绩块，返回是否有改动。
+
+    老绑定可能存着未展开的 ``SaveProtocol_<名>``（绑定当时存档为克莱因导出
+    的压缩格式）：就地展开后由调用方落盘，之后各查询命令都按明文键读取。
+    """
+    data = binding.get("data")
+    if not isinstance(data, dict):
+        return False
+    if not any(key.startswith("SaveProtocol_") for key in data):
+        return False
+    try:
+        binding["data"] = expand_protocol(data)
+    except DecryptError as exc:
+        logger.error(f"{qq} 存档协议展开失败: {exc}")
+        return False
+    return True
+
+
 def _load_bindings() -> None:
     """加载绑定：``bindings/<qq>.json`` 每用户一个文件。
 
     兼容旧格式：合并文件（``bindings.json`` / 备份 / 插件内旧位置）
     中尚未拆分到新目录的用户会被补入并迁移。
     """
+    expanded = False
     if _BINDINGS_DIR.is_dir():
         for path in sorted(_BINDINGS_DIR.glob("*.json")):
             binding = _read_binding_file(path)
             if binding is not None:
+                expanded |= _expand_stored_data(path.stem, binding)
                 _bindings[path.stem] = binding
-    if _merge_legacy_bindings():
+    if _merge_legacy_bindings() or expanded:
         _save_bindings()
 
 
@@ -268,7 +290,7 @@ def _read_binding_file(path: Path) -> dict | None:
 
 
 def _merge_legacy_bindings() -> bool:
-    """从旧合并文件补入尚未拆分的用户，返回是否有新增。"""
+    """从旧合并文件补入尚未拆分的用户，返回是否有新增（补入即落盘）。"""
     migrated = False
     for path in (_BINDINGS_PATH, _BINDINGS_BAK, _OLD_BINDINGS_PATH):
         try:
@@ -283,6 +305,7 @@ def _merge_legacy_bindings() -> bool:
                 and isinstance(binding, dict)
                 and isinstance(binding.get("data"), dict)
             ):
+                _expand_stored_data(qq, binding)
                 _bindings[qq] = binding
                 migrated = True
         break  # 取第一个可用的旧合并文件补漏
@@ -312,7 +335,10 @@ def _store_binding(qq: str, data: dict, raw_b64: str | None = None) -> str:
     _bindings[qq] = binding
     _save_bindings()
     name = str(data.get("AccountName") or "未知玩家")
-    return f"✅ 绑定成功！\n玩家：{name}\n发送 /bmrating 查看 Rating\n发送 /bmexport 可导出存档文件"
+    return (
+        f"✅ 绑定成功！\n玩家：{name}\n"
+        "发送 /bmrating 查看 Rating\n发送 /bmexport 可导出存档文件"
+    )
 
 
 def _decode_text(raw: bytes) -> str:
