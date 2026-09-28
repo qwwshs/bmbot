@@ -471,6 +471,7 @@ def normalize_n10_name(name: str) -> str:
     text = re.sub(r"[（(]\s*RU\s*[)）]", "", name.strip(), flags=re.IGNORECASE)
     text = re.sub(r"[_\u3000]+", " ", text)
     text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+(?=[(（])", "", text)
     return text.strip().lower()
 
 
@@ -511,6 +512,20 @@ def _normalized_index(constants: dict[str, dict]) -> dict[str, str]:
             for variant in normalized_variants(original):
                 index.setdefault(variant, name)
     return index
+
+
+def archive_score_names(
+    name: str, entry: dict, norm_index: dict[str, str]
+) -> list[str]:
+    """返回确实归属该曲目的存档键名，按内部名、显示名、原曲名排序。"""
+    candidates = [str(a).strip() for a in entry.get("aliases") or []]
+    candidates.extend((name, str(entry.get("originalName") or "").strip()))
+    result: list[str] = []
+    for candidate in candidates:
+        normalized = normalize_n10_name(candidate)
+        if normalized and normalized not in result and norm_index.get(normalized) == name:
+            result.append(normalized)
+    return result
 
 
 def _resolve_name(

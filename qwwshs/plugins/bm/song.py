@@ -11,7 +11,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .rating import ALL_DIFFS, get_grade, normalize_n10_name, normalized_variants
+from .rating import (
+    ALL_DIFFS,
+    _normalized_index,
+    archive_score_names,
+    get_grade,
+    normalize_n10_name,
+    normalized_variants,
+)
 
 IMAGE_DIR = Path(__file__).resolve().parent / "images"
 
@@ -137,7 +144,7 @@ def _fuzzy_search(constants: dict[str, dict], q_variants: frozenset[str]) -> lis
 
 
 def search_songs(constants: dict[str, dict], query: str) -> list[str]:
-    """搜索曲目：别名/归一化变体精确匹配优先，否则按子串位置排序的模糊匹配。"""
+    """搜索曲目：自定义别名、显示名、表内别名依次精确匹配，再模糊匹配。"""
     resolved = _resolve_alias(query)
     if resolved is not None:
         if resolved in constants:
@@ -148,6 +155,14 @@ def search_songs(constants: dict[str, dict], query: str) -> list[str]:
     q_variants = normalized_variants(query)
     if not any(q_variants):
         return []
+    titles = [
+        name
+        for name, entry in constants.items()
+        if normalized_variants(name) & q_variants
+        or normalized_variants(str(entry.get("originalName") or "")) & q_variants
+    ]
+    if titles:
+        return titles
     exact = [
         name
         for name, entry in constants.items()
@@ -159,19 +174,24 @@ def search_songs(constants: dict[str, dict], query: str) -> list[str]:
 
 
 def get_song_scores(
-    data: dict, song_name: str, entry: dict | None = None
+    data: dict,
+    song_name: str,
+    entry: dict | None = None,
+    constants: dict[str, dict] | None = None,
 ) -> list[tuple[str, int, str]]:
     """按难度顺序返回 ``(难度, 分数, 等级)``，0 分/无成绩的难度跳过。
 
     存档 ``BestScore_`` 键用游戏内部名，与表内曲名（显示名）可能不同，
     依次尝试 别名（内部名）→ 曲名 → 原曲名 的归一化形式。
     """
-    candidates = [str(a).strip() for a in (entry or {}).get("aliases") or []]
-    candidates.append(song_name)
-    original = str((entry or {}).get("originalName") or "").strip()
-    if original and original not in candidates:
-        candidates.append(original)
-    wanted = [normalize_n10_name(c) for c in candidates if c]
+    if constants is not None:
+        wanted = archive_score_names(
+            song_name, entry or {}, _normalized_index(constants)
+        )
+    else:
+        candidates = [str(a).strip() for a in (entry or {}).get("aliases") or []]
+        candidates.extend((song_name, str((entry or {}).get("originalName") or "")))
+        wanted = [normalize_n10_name(c) for c in candidates if c]
     index: dict[tuple[str, str], int] = {}
     for key, value in data.items():
         if not key.startswith("BestScore_"):

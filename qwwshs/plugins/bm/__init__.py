@@ -67,6 +67,8 @@ from .rating import (
     ALL_DIFFS,
     N10_SONG_LIST,
     Chart,
+    _normalized_index,
+    archive_score_names,
     calculate_chart_potential,
     compute_rating,
     normalize_n10_name,
@@ -961,7 +963,7 @@ async def _send_song_detail(matcher: Matcher, qq: str, name: str) -> None:
         scores: list[tuple[str, int, str]] = []
         hint = "\n💡 发送 /bmbind 绑定存档后可查看成绩"
     else:
-        scores = get_song_scores(binding["data"], name, entry)
+        scores = get_song_scores(binding["data"], name, entry, SONG_CONSTANTS)
         hint = ""
     text = format_song_detail(name, entry, scores) + hint
     cover = find_cover(name, entry)
@@ -1733,19 +1735,16 @@ def _score_from_archive(
     song: str,
     diff: str,
     entry: dict,
+    norm_index: dict[str, str],
 ) -> int:
     """从存档中取指定谱面的分数（0 = 未找到）。
 
     存档键用游戏内部名，与表内曲名（显示名）可能不同，
     依次尝试 别名 → 曲名 → 原曲名 的归一化形式。
     """
-    candidates = [str(a).strip() for a in entry.get("aliases") or []]
-    candidates.append(song)
-    original = str(entry.get("originalName") or "").strip()
-    if original and original not in candidates:
-        candidates.append(original)
-    wanted = {normalize_n10_name(c) for c in candidates if c}
+    wanted = archive_score_names(song, entry, norm_index)
     prefix = "BestScore_"
+    scores: dict[str, int] = {}
     for key, value in data.items():
         if not key.startswith(prefix):
             continue
@@ -1755,10 +1754,10 @@ def _score_from_archive(
         name = normalize_n10_name("_".join(parts[1:-1]))
         if name in wanted:
             try:
-                return int(float(value))
+                scores[name] = int(float(value))
             except (TypeError, ValueError):
                 pass
-    return 0
+    return next((scores[name] for name in wanted if scores.get(name, 0) > 0), 0)
 
 
 def _parse_chart_args(
@@ -1836,10 +1835,11 @@ async def _handle_chart_score(
             "❌ 尚未绑定存档，请先 /bmbind 绑定后再使用 score 模式"
         )
     data = binding["data"]
+    norm_index = _normalized_index(SONG_CONSTANTS)
     rated: list[Chart] = []
     for constant, song, diff in charts:
         entry = SONG_CONSTANTS.get(song) or {}
-        score = _score_from_archive(data, song, diff, entry)
+        score = _score_from_archive(data, song, diff, entry, norm_index)
         if score <= 0:
             continue
         potential = calculate_chart_potential(score, constant)
