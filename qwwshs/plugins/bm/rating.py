@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Iterator
 
 try:
     import opencc
@@ -485,7 +486,7 @@ _DELETED_SONGS: frozenset[str] = frozenset({
 })
 
 
-def _normalized_index(constants: dict[str, dict]) -> dict[str, str]:
+def archive_name_index(constants: dict[str, dict]) -> dict[str, str]:
     """构建曲名归一化变体 → 表内规范曲名的索引。
 
     **别名（游戏内部名）先注册**：存档 BestScore 键是内部名，当一首歌的
@@ -528,13 +529,51 @@ def archive_score_names(
     return result
 
 
+def iter_archive_scores(data: dict) -> Iterator[tuple[str, str, int]]:
+    """依次解析存档中的 ``BestScore_<内部名>_<难度>`` 记录。"""
+    for key, value in data.items():
+        if not key.startswith("BestScore_"):
+            continue
+        parts = key.split("_")
+        if len(parts) < 3:
+            continue
+        try:
+            score = int(float(value))
+        except (TypeError, ValueError):
+            continue
+        yield "_".join(parts[1:-1]), parts[-1], score
+
+
+def archive_score_index(data: dict) -> dict[tuple[str, str], int]:
+    """将存档成绩按归一化内部名和难度建索引。"""
+    return {
+        (normalize_n10_name(name), diff): score
+        for name, diff, score in iter_archive_scores(data)
+    }
+
+
+def archive_chart_score(
+    scores: dict[tuple[str, str], int],
+    song: str,
+    entry: dict,
+    diff: str,
+    norm_index: dict[str, str],
+) -> int:
+    """按曲目归属及内部名优先级取分数，未游玩返回 0。"""
+    for name in archive_score_names(song, entry, norm_index):
+        score = scores.get((name, diff), 0)
+        if score > 0:
+            return score
+    return 0
+
+
 def _resolve_name(
     constants: dict[str, dict], norm_index: dict[str, str], name: str
 ) -> tuple[dict | None, str]:
     """按曲名查定数表（含归一化变体回退），返回 (条目, 表内规范曲名)。
 
     不做显示名精确短路：传入的是存档内部名，与某曲显示名相同的情况
-    由别名优先的归一化索引裁决（见 ``_normalized_index``）。
+    由别名优先的归一化索引裁决（见 ``archive_name_index``）。
     """
     for variant in normalized_variants(name):
         canonical = norm_index.get(variant)
@@ -559,19 +598,8 @@ def parse_scores(
     grade_counts: dict[str, dict[str, int]] = {
         diff: dict.fromkeys(GRADES, 0) for diff in ALL_DIFFS
     }
-    norm_index = _normalized_index(constants)
-    for key, value in data.items():
-        if not key.startswith("BestScore_"):
-            continue
-        parts = key.split("_")
-        if len(parts) < 3:
-            continue
-        diff = parts[-1]
-        name = "_".join(parts[1:-1])
-        try:
-            score = int(float(value))
-        except (TypeError, ValueError):
-            continue
+    norm_index = archive_name_index(constants)
+    for name, diff, score in iter_archive_scores(data):
         grade = get_grade(score)
         if diff in ALL_DIFFS:
             grade_counts[diff][grade] += 1

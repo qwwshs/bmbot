@@ -13,8 +13,9 @@ from pathlib import Path
 
 from .rating import (
     ALL_DIFFS,
-    _normalized_index,
-    archive_score_names,
+    archive_chart_score,
+    archive_name_index,
+    archive_score_index,
     get_grade,
     normalize_n10_name,
     normalized_variants,
@@ -36,7 +37,6 @@ def _image_dir_index() -> dict[str, Path]:
     return _image_index
 
 _SEARCH_LIMIT = 20
-_MIN_KEY_PARTS = 3
 
 # 用户自定义别名：别名 -> 表内曲名（持久化于 data/bm/aliases.json）
 _ALIASES: dict[str, str] = {}
@@ -104,12 +104,18 @@ def _resolve_alias(query: str) -> str | None:
     return None
 
 
-def _entry_variants(name: str, entry: dict) -> frozenset[str]:
-    """条目变体集合：曲名 + 「原曲名」+「别名」（游戏内部名等）。"""
+def _title_variants(name: str, entry: dict) -> frozenset[str]:
+    """显示名和原曲名的归一化变体。"""
     variants = set(normalized_variants(name))
     original = str(entry.get("originalName") or "").strip()
     if original and original != name:
         variants |= normalized_variants(original)
+    return frozenset(variants)
+
+
+def _entry_variants(name: str, entry: dict) -> frozenset[str]:
+    """条目变体集合：显示名、原曲名及别名（游戏内部名等）。"""
+    variants = set(_title_variants(name, entry))
     for alias_raw in entry.get("aliases") or []:
         alias = str(alias_raw).strip()
         if alias and alias != name:
@@ -158,8 +164,7 @@ def search_songs(constants: dict[str, dict], query: str) -> list[str]:
     titles = [
         name
         for name, entry in constants.items()
-        if normalized_variants(name) & q_variants
-        or normalized_variants(str(entry.get("originalName") or "")) & q_variants
+        if _title_variants(name, entry) & q_variants
     ]
     if titles:
         return titles
@@ -176,41 +181,19 @@ def search_songs(constants: dict[str, dict], query: str) -> list[str]:
 def get_song_scores(
     data: dict,
     song_name: str,
-    entry: dict | None = None,
-    constants: dict[str, dict] | None = None,
+    entry: dict,
+    constants: dict[str, dict],
 ) -> list[tuple[str, int, str]]:
     """按难度顺序返回 ``(难度, 分数, 等级)``，0 分/无成绩的难度跳过。
 
-    存档 ``BestScore_`` 键用游戏内部名，与表内曲名（显示名）可能不同，
-    依次尝试 别名（内部名）→ 曲名 → 原曲名 的归一化形式。
+    存档键用游戏内部名；按定数表归属与内部名优先级读取。
     """
-    if constants is not None:
-        wanted = archive_score_names(
-            song_name, entry or {}, _normalized_index(constants)
-        )
-    else:
-        candidates = [str(a).strip() for a in (entry or {}).get("aliases") or []]
-        candidates.extend((song_name, str((entry or {}).get("originalName") or "")))
-        wanted = [normalize_n10_name(c) for c in candidates if c]
-    index: dict[tuple[str, str], int] = {}
-    for key, value in data.items():
-        if not key.startswith("BestScore_"):
-            continue
-        parts = key.split("_")
-        if len(parts) < _MIN_KEY_PARTS:
-            continue
-        try:
-            score = int(float(value))
-        except (TypeError, ValueError):
-            continue
-        name = normalize_n10_name("_".join(parts[1:-1]))
-        index[(name, parts[-1])] = score
+    index = archive_score_index(data)
+    norm_index = archive_name_index(constants)
     result: list[tuple[str, int, str]] = []
     for diff in ALL_DIFFS:
-        score = next(
-            (index[(w, diff)] for w in wanted if index.get((w, diff))), None
-        )
-        if score and score > 0:
+        score = archive_chart_score(index, song_name, entry, diff, norm_index)
+        if score > 0:
             result.append((diff, score, get_grade(score)))
     return result
 

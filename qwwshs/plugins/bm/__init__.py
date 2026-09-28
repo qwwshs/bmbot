@@ -67,8 +67,9 @@ from .rating import (
     ALL_DIFFS,
     N10_SONG_LIST,
     Chart,
-    _normalized_index,
-    archive_score_names,
+    archive_chart_score,
+    archive_name_index,
+    archive_score_index,
     calculate_chart_potential,
     compute_rating,
     normalize_n10_name,
@@ -1730,36 +1731,6 @@ def _parse_const_token(token: str) -> tuple[float, float]:
     return value, value + 0.5
 
 
-def _score_from_archive(
-    data: dict,
-    song: str,
-    diff: str,
-    entry: dict,
-    norm_index: dict[str, str],
-) -> int:
-    """从存档中取指定谱面的分数（0 = 未找到）。
-
-    存档键用游戏内部名，与表内曲名（显示名）可能不同，
-    依次尝试 别名 → 曲名 → 原曲名 的归一化形式。
-    """
-    wanted = archive_score_names(song, entry, norm_index)
-    prefix = "BestScore_"
-    scores: dict[str, int] = {}
-    for key, value in data.items():
-        if not key.startswith(prefix):
-            continue
-        parts = key.split("_")
-        if len(parts) < 3 or parts[-1] != diff:  # noqa: PLR2004
-            continue
-        name = normalize_n10_name("_".join(parts[1:-1]))
-        if name in wanted:
-            try:
-                scores[name] = int(float(value))
-            except (TypeError, ValueError):
-                pass
-    return next((scores[name] for name in wanted if scores.get(name, 0) > 0), 0)
-
-
 def _parse_chart_args(
     args: list[str],
 ) -> tuple[float | None, float | None, list[str], bool]:
@@ -1835,11 +1806,12 @@ async def _handle_chart_score(
             "❌ 尚未绑定存档，请先 /bmbind 绑定后再使用 score 模式"
         )
     data = binding["data"]
-    norm_index = _normalized_index(SONG_CONSTANTS)
+    scores = archive_score_index(data)
+    norm_index = archive_name_index(SONG_CONSTANTS)
     rated: list[Chart] = []
     for constant, song, diff in charts:
         entry = SONG_CONSTANTS.get(song) or {}
-        score = _score_from_archive(data, song, diff, entry, norm_index)
+        score = archive_chart_score(scores, song, entry, diff, norm_index)
         if score <= 0:
             continue
         potential = calculate_chart_potential(score, constant)
